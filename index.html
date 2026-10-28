@@ -198,6 +198,14 @@ input[type=checkbox]{width:24px;height:24px;min-height:0;padding:0;margin:0;acce
 .drink img,.drink .noimg{width:44px;height:44px;border-radius:10px;object-fit:cover;flex:none;display:flex;align-items:center;justify-content:center;background:var(--water-l)}
 .drink .small{flex:1;line-height:1.25}
 .sched{border:2px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
+.stations{margin:6px 0 10px;padding-left:20px}
+.stations li{padding:2px 0}.stations details{border:none;padding:0}.stations summary{padding:0;font-weight:600;color:var(--muted)}
+.ctimer{border-radius:18px;padding:18px 14px;text-align:center;color:#fff;background:var(--orange);transition:background .3s}
+.ctimer.work{background:var(--pitch)}.ctimer.rest{background:var(--water)}
+.ctimer .ctname{font-size:28px;font-weight:800;margin-top:6px;line-height:1.15}
+.ctimer .clock{font-size:72px;margin:6px 0;color:#fff}
+.ctbar{height:8px;border-radius:8px;background:rgba(255,255,255,.3);margin-top:12px;overflow:hidden}
+.ctbar div{height:100%;width:0;background:#fff;transition:width .2s}
 .chk.on{background:var(--pitch);border-color:var(--pitch)}
 .item.done .t{text-decoration:line-through;opacity:.6}
 .item details{border:none;padding:0}.item summary{padding:2px 0;font-weight:600;color:var(--muted)}
@@ -505,7 +513,12 @@ const WK_EQUIP = [['ball', '⚽ Ball'], ['wall', '🧱 A wall'], ['rope', '➰ S
 const WK_PLACES = [['home', '🏠 Home'], ['park', '🌳 Park / ground'], ['gym', '🏫 Gym / hall']];
 const WK_LEVELS = [['new', 'Just starting'], ['some', 'A bit'], ['pro', 'Lots']];
 const WK_NIGGLES = [['knees', 'Knees'], ['ankles', 'Ankles'], ['back', 'Back'], ['other', 'Something else']];
-const WK_DEFAULT = { goals: ['speed', 'skills', 'core'], perWeek: 2, minutes: 20, place: 'park', equipment: ['ball'], level: 'some', niggles: [] };
+const WK_DEFAULT = { goals: ['speed', 'skills', 'core'], perWeek: 2, minutes: 20, place: 'park', equipment: ['ball'], level: 'some', niggles: [], style: 'normal' };
+// Circuits: exercises done back-to-back for a set time each, repeated for rounds.
+const STATIONS = new Set(['fastfeet', 'jacks', 'climbers', 'skipping', 'squats', 'lunges', 'pushups', 'bridges', 'calves', 'balance', 'broadjump', 'plank', 'sideplank', 'deadbug', 'superman', 'toetaps', 'juggling', 'shuttle', 'starts']);
+const CIRCUIT_TIMES = [[30, 30], [40, 20], [45, 15]]; // seconds on / off, by experience
+const circuitSecs = c => c.rounds * (c.items.length * (c.work + c.rest) - c.rest) + (c.rounds - 1) * c.roundRest;
+const circuitSummary = c => `${c.rounds} round${c.rounds === 1 ? '' : 's'} · ${c.work}s on, ${c.rest}s rest · ${c.roundRest}s between rounds`;
 const LV = { new: 0, some: 1, pro: 2 };
 // f: what it trains · eq: needs all of these · space: needs room to sprint · impact: jumping · avoid: niggles it may aggravate
 const EX_WARM = { id: 'warm', n: 'Warm-up', amt: '5 min', secs: [300, 300, 300], how: 'Jog (or jog on the spot) for 2 minutes, then high knees, heel flicks, leg swings, arm circles and side shuffles.' };
@@ -591,8 +604,29 @@ function workoutDrink() {
   return `Drink about ${clamp(Math.round(w * 6 / 50) * 50, 200, 500)} ml in the hour before, sip during, and 2 glasses after.`;
 }
 // A workout built from the answers, tests and growth. `variant` rotates the exercises so a second workout day isn't a repeat.
+function suggestCircuit(ctx, variant) {
+  const a = ctx.a, lv = LV[a.level] ?? 1, total = +a.minutes || 20, [work, rest] = CIRCUIT_TIMES[lv];
+  const n = total <= 15 ? 4 : total <= 25 ? 5 : 6, roundRest = 60;
+  const pool = EX.filter(e => STATIONS.has(e.id) && exAllowed(e, a, ctx.spurt)), used = new Set(), st = [];
+  for (let round = 0; st.length < n && round < 6; round++) {
+    let added = false;
+    for (let i = 0; i < ctx.goals.length && st.length < n; i++) {
+      const g = ctx.goals[(i + variant) % ctx.goals.length];
+      const c = pool.filter(e => e.f.includes(g) && !used.has(e.id)); if (!c.length) continue;
+      const e = c[(variant + round) % c.length]; used.add(e.id); st.push(e); added = true;
+    }
+    if (!added) break;
+  }
+  for (const e of pool) { if (st.length >= Math.min(n, 4)) break; if (!used.has(e.id)) { used.add(e.id); st.push(e); } } // at least 4 stations
+  if (ctx.spurt && !used.has('balance') && pool.some(e => e.id === 'balance')) st.push(EX.find(e => e.id === 'balance'));
+  const c = { id: 'circuit', type: 'circuit', name: 'Circuit', rounds: 1, work, rest, roundRest, items: st.map(e => ({ id: e.id, name: e.n, how: e.how })) };
+  const perRound = circuitSecs({ ...c, rounds: 1 }) + roundRest;
+  c.rounds = clamp(Math.floor(((total - 8) * 60 + roundRest) / perRound), 2, 6);
+  return [EX_WARM, c, EX_COOL].map(x => x.type ? x : { id: x.id, name: x.n, amount: x.amt, secs: x.secs ? x.secs[lv] : null, how: x.how });
+}
 function suggestWorkout(variant = 0) {
   const ctx = wkContext(), a = ctx.a, lv = LV[a.level] ?? 1, total = +a.minutes || 20, goals = ctx.goals;
+  if (a.style === 'circuit') return suggestCircuit(ctx, variant);
   let budget = total - 8;
   const pool = EX.filter(e => exAllowed(e, a, ctx.spurt)), used = new Set(), items = [];
   for (let round = 0; budget > 1 && round < 8; round++) {
@@ -630,7 +664,8 @@ function currentWorkout(k = today()) {
   const W = S.workout;
   if (W.mode === 'own' && W.own.length && !UI.wkSugg) {
     return { own: true, title: 'My workout', minutes: +W.ownMinutes || 30,
-      items: W.own.map(x => ({ ...x, secs: secsFrom(x.amount), how: exByName(x.name)?.how || '' })) };
+      items: W.own.map(x => x.type === 'circuit' ? { ...x, items: x.items.map(y => ({ ...y, how: exByName(y.name)?.how || '' })) }
+        : { ...x, secs: secsFrom(x.amount), how: exByName(x.name)?.how || '' }) };
   }
   const idx = Math.max(0, workoutDays().indexOf(parseKey(k).getDay()));
   return { own: false, title: wkTitle(), minutes: +wkAnswers().minutes || 20, items: suggestWorkout(idx) };
@@ -721,6 +756,75 @@ function beep(times = 3) {
     }
   } catch (e) { }
   if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 400]);
+}
+function tone(times = 1, freq = 880, len = .18) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume();
+    for (let i = 0; i < times; i++) {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+      const t = audioCtx.currentTime + i * (len + .1); g.gain.setValueAtTime(.3, t); g.gain.exponentialRampToValueAtTime(.001, t + len); o.start(t); o.stop(t + len + .01);
+    }
+  } catch (e) { }
+}
+// Runs a circuit: get ready, then each exercise for `work` seconds with `rest` between, `roundRest` between rounds.
+function openCircuit(c) {
+  const st = c.items;
+  const steps = [{ kind: 'ready', name: 'Get ready', secs: 10, next: st[0].name }];
+  for (let r = 1; r <= c.rounds; r++) st.forEach((x, i) => {
+    steps.push({ kind: 'work', name: x.name, secs: c.work, round: r, idx: i, next: st[i + 1]?.name || (r < c.rounds ? st[0].name : null) });
+    if (i < st.length - 1 && c.rest) steps.push({ kind: 'rest', name: 'Rest', secs: c.rest, round: r, idx: i, next: st[i + 1].name });
+    if (i === st.length - 1 && r < c.rounds && c.roundRest) steps.push({ kind: 'rest', name: `Round ${r} done — rest`, secs: c.roundRest, round: r, idx: i, next: st[0].name });
+  });
+  const total = steps.reduce((a, x) => a + x.secs, 0);
+  let i = -1, end = 0, left = 0, paused = false, iv = 0, lock = null, lastSec = -1;
+  tone(1, 660); // unlocks sound on phones: it has to start from a tap
+  modal(`<div class="ctimer" id="ct">
+      <div class="small" id="ctWhere"></div><div class="ctname" id="ctName"></div><div class="clock" id="ctClock"></div>
+      <div class="small" id="ctNext"></div><div class="ctbar"><div id="ctBar"></div></div></div>
+    <div class="grid3" style="margin-top:14px"><button class="btn ghost" id="ctStop">■ Stop</button><button class="btn primary" id="ctPause">⏸ Pause</button><button class="btn" id="ctSkip">Skip ⏭</button></div>`, m => {
+    const el = id => $('#' + id, m);
+    const doneSecs = () => steps.slice(0, i).reduce((a, x) => a + x.secs, 0) + (steps[i] ? steps[i].secs - left / 1000 : 0);
+    const draw = () => {
+      const x = steps[i], sec = Math.ceil(left / 1000);
+      el('ct').className = 'ctimer ' + x.kind;
+      el('ctWhere').textContent = x.kind === 'ready' ? `${st.length} exercises · ${c.rounds} rounds` : `Round ${x.round} of ${c.rounds} · Exercise ${x.idx + 1} of ${st.length}`;
+      el('ctName').textContent = x.name;
+      el('ctClock').textContent = `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
+      el('ctNext').textContent = x.next ? `Next: ${x.next}` : 'Last one — go!';
+      el('ctBar').style.width = (doneSecs() / total * 100).toFixed(1) + '%';
+    };
+    const finish = () => {
+      clearInterval(iv); try { lock?.release(); } catch (e) { }
+      beep(3); confetti();
+      $('.sheet', m).innerHTML = `<div class="center"><div style="font-size:56px">🎉</div><h2>Circuit done!</h2><p class="muted">${c.rounds} rounds of ${st.length} exercises. Drink 2 glasses of water.</p></div>
+        <div class="grid2" style="margin-top:14px"><button class="btn ghost" data-act="closeModal">Close</button><button class="btn primary" id="ctLog">📝 Log workout</button></div>`;
+      $('#ctLog', m).onclick = () => { closeModal(); openWorkoutLog(); };
+    };
+    const go = n => {
+      i = n; if (i >= steps.length) return finish();
+      left = steps[i].secs * 1000; end = performance.now() + left; lastSec = -1;
+      if (steps[i].kind === 'work') { tone(2, 988); navigator.vibrate?.(300); } else if (i) { tone(1, 523, .35); navigator.vibrate?.(150); }
+      draw();
+    };
+    iv = setInterval(() => {
+      if (paused) return;
+      left = end - performance.now();
+      if (left <= 0) return go(i + 1);
+      const sec = Math.ceil(left / 1000);
+      if (sec <= 3 && sec !== lastSec) { lastSec = sec; tone(1, 740, .08); } // 3, 2, 1
+      draw();
+    }, 100);
+    el('ctPause').onclick = () => {
+      paused = !paused;
+      if (paused) left = end - performance.now(); else end = performance.now() + left;
+      el('ctPause').textContent = paused ? '▶️ Resume' : '⏸ Pause';
+    };
+    el('ctSkip').onclick = () => go(i + 1);
+    el('ctStop').onclick = () => closeModal();
+    try { navigator.wakeLock?.request('screen').then(l => { lock = l; }).catch(() => { }); } catch (e) { } // keep the screen on
+    m._cleanup = () => { clearInterval(iv); try { lock?.release(); } catch (e) { } };
+    go(0);
+  });
 }
 function modal(html, onMount) {
   closeModal();
@@ -1241,7 +1345,11 @@ function fitWorkout(b) {
     <div class="row between"><h2 style="margin:0">${esc(cw.title)}</h2><span class="tag">${cw.minutes} min</span></div>
     <p class="small muted">${cw.own ? 'Your own workout.' : wkAnswered() ? 'Made for you. Bodyweight only.' : 'A starter workout. Answer the questions in Profile to make it yours.'}${skipped.length ? ` No ${skipped.map(g => goalName(g).toLowerCase()).join('/')} exercises fit your answers yet — add equipment or change the place in Profile.` : ''}</p>
     ${reasons.length ? `<details class="why"><summary>Why this workout?</summary>${reasons.map(([e, r]) => `<div class="sugg"><span class="em">${e}</span><div class="small">${esc(r)}</div></div>`).join('')}</details>` : ''}
-    ${cw.items.map(x => { const on = wk.checked.includes(x.id); return `<div class="item ${on ? 'done' : ''}">
+    ${cw.items.map(x => { const on = wk.checked.includes(x.id); return x.type === 'circuit' ? `<div class="item ${on ? 'done' : ''}" style="align-items:flex-start">
+      <button class="chk ${on ? 'on' : ''}" data-act="wkCheck" data-id="${esc(x.id)}" aria-label="Tick off ${esc(x.name)}">${on ? '✓' : ''}</button>
+      <div class="grow"><div class="t">🔁 ${esc(x.name)}</div><div class="small muted">${esc(circuitSummary(x))}${x.items.length ? ` · about ${Math.ceil(circuitSecs(x) / 60)} min` : ''}</div>
+        <ol class="stations">${x.items.map(y => `<li>${esc(y.name)}${y.how ? `<details><summary class="small">How</summary><p class="small">${esc(y.how)}</p></details>` : ''}</li>`).join('')}</ol>
+        <button class="btn sm primary" data-act="startCircuit" data-id="${esc(x.id)}" ${x.items.length ? '' : 'disabled'}>▶️ Start circuit timer</button></div></div>` : `<div class="item ${on ? 'done' : ''}">
       <button class="chk ${on ? 'on' : ''}" data-act="wkCheck" data-id="${esc(x.id)}" aria-label="Tick off ${esc(x.name)}">${on ? '✓' : ''}</button>
       <div class="grow"><div class="t">${esc(x.name)}</div><div class="small muted">${esc(x.amount || '')}</div>
         ${x.how ? `<details><summary class="small">How to do it</summary><p class="small">${esc(x.how)}</p></details>` : ''}</div>
@@ -1275,7 +1383,9 @@ function fitWorkout(b) {
 /* workout log: nothing counts as done until it's logged, and the date is yours to choose */
 function openWorkoutLog(logId, blank) {
   const old = S.workoutLog.find(l => l.id === logId), cw = currentWorkout(), checked = getDay(today())?.wk?.checked || [];
-  const items = old ? old.items.map(x => ({ ...x })) : blank ? [] : cw.items.map(x => ({ name: x.name, amount: x.amount, done: checked.includes(x.id) }));
+  const items = old ? old.items.map(x => ({ ...x })) : blank ? [] : cw.items.map(x => x.type === 'circuit'
+    ? { name: `🔁 ${x.name}: ${x.items.map(y => y.name).join(', ')}`, amount: circuitSummary(x), done: checked.includes(x.id) }
+    : { name: x.name, amount: x.amount, done: checked.includes(x.id) });
   let effort = old?.effort || 'medium';
   modal(`<h2>${old ? 'Edit workout' : 'Log a workout'}</h2>
     <label class="f">Workout<input id="wlTitle" value="${esc(old?.title || (blank ? '' : cw.title))}" placeholder="e.g. Speed session"></label>
@@ -1410,6 +1520,20 @@ function profMe(b) {
     datasets: [{ data: hs.map(x => +x.height), borderColor: '#1b7a3a', backgroundColor: 'rgba(27,122,58,.15)', fill: true, tension: .3, pointRadius: 5 }] },
     options: { scales: { y: { title: { display: true, text: 'height (cm)' } } } } });
 }
+function circuitEditor(c, i, n) {
+  const num = (f, label, min, max) => `<label class="f" style="margin:0">${label}<input type="number" inputmode="numeric" min="${min}" max="${max}" data-change="circ" data-id="${c.id}" data-f="${f}" value="${c[f]}"></label>`;
+  return `<div class="sched circuit-ed">
+    <div class="row"><span style="font-size:22px">🔁</span><input class="grow" data-change="circ" data-id="${c.id}" data-f="name" value="${esc(c.name)}" aria-label="Circuit name">
+      <button class="icon-btn" data-act="moveOwn" data-dir="-1" data-id="${c.id}" aria-label="Move up" ${i ? '' : 'disabled style="opacity:.25"'}>↑</button>
+      <button class="icon-btn" data-act="moveOwn" data-dir="1" data-id="${c.id}" aria-label="Move down" ${i < n - 1 ? '' : 'disabled style="opacity:.25"'}>↓</button>
+      <button class="icon-btn" data-act="delOwn" data-id="${c.id}" aria-label="Delete circuit">🗑️</button></div>
+    <div class="grid2" style="margin-top:10px">${num('rounds', 'Rounds', 1, 10)}${num('work', 'Work (seconds)', 5, 300)}${num('rest', 'Rest (seconds)', 0, 300)}${num('roundRest', 'Rest between rounds (s)', 0, 600)}</div>
+    <p class="small muted" style="margin:8px 0 4px">Exercises in order${c.items.length ? ` · about ${Math.ceil(circuitSecs(c) / 60)} min` : ''}</p>
+    ${c.items.map((y, j) => `<div class="row small" style="padding:4px 0"><b style="width:18px">${j + 1}</b><span class="grow">${esc(y.name)}</span>
+      <button class="icon-btn" data-act="delStation" data-id="${c.id}" data-sid="${y.id}" aria-label="Remove">✕</button></div>`).join('') || '<p class="small muted">No exercises yet.</p>'}
+    <div class="row" style="margin-top:6px"><input id="st-${c.id}" list="exList" placeholder="Add an exercise, e.g. Squats" class="grow" autocomplete="off"><button class="btn sm" data-act="addStation" data-id="${c.id}">Add</button></div>
+  </div>`;
+}
 function clashText() {
   const out = [];
   for (const d of [1, 2, 3, 4, 5, 6, 0]) {
@@ -1425,7 +1549,7 @@ function workoutProfileCard() {
     return `<button class="chip ${on ? 'on' : ''}" data-act="wkAns" data-f="${field}" data-val="${id}" data-multi="${multi ? 1 : ''}">${n}</button>`;
   }).join('')}${after}</div>`;
   const own = W.mode === 'own' ? `
-    <div style="margin-top:12px">${W.own.length ? W.own.map((x, i) => UI.editOwn === x.id ? `<div class="item" style="flex-wrap:wrap">
+    <div style="margin-top:12px">${W.own.length ? W.own.map((x, i) => x.type === 'circuit' ? circuitEditor(x, i, W.own.length) : UI.editOwn === x.id ? `<div class="item" style="flex-wrap:wrap">
       <div class="grid2" style="width:100%"><input id="eoName" value="${esc(x.name)}" list="exList" aria-label="Exercise"><input id="eoAmt" value="${esc(x.amount)}" placeholder="How much" aria-label="How much"></div>
       <div class="grid2" style="width:100%"><button class="btn sm ghost" data-act="cancelOwnEdit">Cancel</button><button class="btn sm primary" data-act="saveOwnEdit">Save</button></div></div>`
       : `<div class="item"><div class="grow"><div class="t">${esc(x.name)}</div><div class="small muted">${esc(x.amount)}</div></div>
@@ -1436,7 +1560,7 @@ function workoutProfileCard() {
     <div class="grid2" style="margin-top:8px"><label class="f">Exercise<input id="ownName" list="exList" placeholder="e.g. Squats" autocomplete="off"></label>
       <label class="f">How much<input id="ownAmt" placeholder="e.g. 3 × 12 or 30 s"></label></div>
     <datalist id="exList">${[EX_WARM, ...EX, EX_COOL].map(e => `<option value="${esc(e.n)}">`).join('')}</datalist>
-    <button class="btn block" data-act="addOwn">+ Add exercise</button>
+    <div class="grid2"><button class="btn" data-act="addOwn">+ Add exercise</button><button class="btn" data-act="addCircuit">🔁 Add circuit</button></div>
     ${W.own.length ? '' : '<button class="btn ghost block" style="margin-top:8px" data-act="wkAdopt">Start from a suggested workout instead</button>'}
     <p style="font-weight:700;margin:14px 0 6px">Which days do you do it?</p>
     <div class="weekdays">${[1, 2, 3, 4, 5, 6, 0].map(d => `<button class="chip ${W.ownDays.includes(d) ? 'on' : ''}" data-act="wkOwnDay" data-val="${d}">${WEEKDAYS[d].slice(0, 2)}</button>`).join('')}</div>
@@ -1451,6 +1575,8 @@ function workoutProfileCard() {
     <p class="small muted">Your suggested workout is made from these.</p>
     ${q('What do you want to get better at? (pick any)', 'goals', WK_GOALS, true)}
     ${q('How many extra workouts a week?', 'perWeek', [[1, '1'], [2, '2'], [3, '3'], [4, '4']], false)}
+    ${q('How do you like to work out?', 'style', [['normal', 'One exercise at a time'], ['circuit', '🔁 Circuit']], false)}
+    <p class="small muted" style="margin:6px 0 0">Circuit: a few exercises back-to-back with short rests, repeated for rounds. A timer runs it for you.</p>
     ${q('How long can each workout be?', 'minutes', a.minutesOther ? [[15, '15 min'], [20, '20 min'], [30, '30 min'], [45, '45 min']].map(([v, n]) => [v + 'x', n]) : [[15, '15 min'], [20, '20 min'], [30, '30 min'], [45, '45 min']], false,
       '', `<button class="chip ${a.minutesOther ? 'on' : ''}" data-act="wkAns" data-f="minutes" data-val="other">✏️ Other</button>`)}
     ${a.minutesOther ? `<label class="f" style="margin-top:8px">Minutes<input type="number" inputmode="numeric" min="5" max="120" data-change="wkMinOther" value="${esc(a.minutes)}"></label>` : ''}
@@ -1628,7 +1754,8 @@ const ACT = {
   wkOwnDay(el) { const d = +el.dataset.val, od = S.workout.ownDays; S.workout.ownDays = od.includes(d) ? od.filter(x => x !== d) : [...od, d]; save(); render(); },
   wkAdopt() {
     const W = S.workout, days = workoutDays(), cw = currentWorkout();
-    W.own = cw.items.map(x => ({ id: uid(), name: x.name, amount: x.amount })); W.ownMinutes = cw.minutes;
+    W.own = cw.items.map(x => x.type === 'circuit' ? { ...x, id: uid(), items: x.items.map(y => ({ id: uid(), name: y.name })) } : { id: uid(), name: x.name, amount: x.amount });
+    W.ownMinutes = cw.minutes;
     if (!W.ownDays.length) W.ownDays = days;
     W.mode = 'own'; UI.wkSugg = false; save(); toast('📌 Saved as your workout — edit it any time in Profile'); render();
   },
@@ -1645,6 +1772,14 @@ const ACT = {
     });
   },
   moreLogs() { UI.wlN = (UI.wlN || 8) + 10; render(); },
+  addCircuit() { S.workout.own.push({ id: uid(), type: 'circuit', name: 'Circuit', rounds: 3, work: 40, rest: 20, roundRest: 60, items: [] }); save(); render(); },
+  addStation(el) {
+    const c = S.workout.own.find(x => x.id === el.dataset.id), inp = $('#st-' + el.dataset.id), name = inp?.value.trim();
+    if (!c || !name) { toast('Type an exercise to add'); inp?.focus(); return; }
+    c.items.push({ id: uid(), name }); save(); render(); setTimeout(() => $('#st-' + c.id)?.focus(), 50);
+  },
+  delStation(el) { const c = S.workout.own.find(x => x.id === el.dataset.id); if (!c) return; c.items = c.items.filter(y => y.id !== el.dataset.sid); save(); render(); },
+  startCircuit(el) { const c = currentWorkout().items.find(x => x.id === el.dataset.id); if (c) openCircuit(c); },
   editOwn(el) { UI.editOwn = el.dataset.id; render(); setTimeout(() => $('#eoName')?.focus(), 50); },
   cancelOwnEdit() { UI.editOwn = null; render(); },
   saveOwnEdit() {
@@ -1815,6 +1950,13 @@ const CHANGE = {
   },
   wkMinOther(el, ev) { if (ev.type !== 'change') return; S.workout.answers = { ...wkAnswers(), minutes: clamp(parseInt(el.value, 10) || 20, 5, 120), minutesOther: true }; save(); render(); },
   wkPlaceOther(el, ev) { if (ev.type !== 'change') return; S.workout.answers = { ...wkAnswers(), placeOther: el.value.trim() }; save(); },
+  circ(el, ev) {
+    if (ev.type !== 'change') return;
+    const c = S.workout.own.find(x => x.id === el.dataset.id), f = el.dataset.f; if (!c) return;
+    const lim = { rounds: [1, 10], work: [5, 300], rest: [0, 300], roundRest: [0, 600] }[f];
+    c[f] = lim ? clamp(parseInt(el.value, 10) || 0, ...lim) : el.value.trim() || 'Circuit';
+    save(); render();
+  },
   wkOwnMin(el, ev) { if (ev.type !== 'change') return; S.workout.ownMinutes = clamp(+el.value || 30, 5, 180); save(); },
   sched(el, ev) {
     if (ev.type !== 'change') return;
