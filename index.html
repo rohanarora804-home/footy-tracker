@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Footy Tracker</title>
 <meta name="description" content="Water, food, sleep, training and fitness tracker for a young footballer. Everything stays on this device.">
 <meta name="theme-color" content="#1b7a3a">
@@ -26,16 +26,17 @@
     --shadow:0 1px 2px rgba(0,0,0,.4)}
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none}
 body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.4;
-  padding-bottom:calc(84px + env(safe-area-inset-bottom))}
-header.top{position:sticky;top:0;z-index:20;color:#fff;
+  display:flex;flex-direction:column;height:100vh;height:100dvh;touch-action:manipulation;-webkit-text-size-adjust:100%}
+header.top{flex:none;position:relative;z-index:20;color:#fff;
   background:repeating-linear-gradient(90deg,var(--pitch) 0 44px,var(--stripe) 44px 88px);
   padding:calc(10px + env(safe-area-inset-top)) 16px 10px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
 header.top .row{max-width:640px;margin:0 auto;display:flex;align-items:center;gap:10px}
 header.top h1{font-size:19px;margin:0;font-weight:800;letter-spacing:.2px;flex:1}
 header.top .date{font-size:13px;opacity:.9}
-main{max-width:640px;margin:0 auto;padding:14px 16px}
+main{flex:1;min-height:0;overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:14px max(16px, calc(50% - 304px)) 24px}
 h2{font-size:18px;margin:0 0 10px}
 h3{font-size:16px;margin:14px 0 8px}
 p{margin:6px 0}
@@ -69,10 +70,10 @@ label.f>input,label.f>select,label.f>textarea{margin-top:4px;color:var(--ink);fo
 .chip{min-height:40px;padding:8px 14px;border-radius:999px;background:var(--bg);border:2px solid var(--line);color:var(--ink);font-weight:600;font-size:15px}
 .chip.on{background:var(--pitch);border-color:var(--pitch);color:#fff}
 .chip.guess{background:var(--water-l);border-color:var(--water);color:var(--ink)}
-.seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px;margin-bottom:14px;gap:4px;box-shadow:var(--shadow)}
+.seg{position:sticky;top:-14px;z-index:15;display:flex;outline:10px solid var(--bg);background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px;margin-bottom:14px;gap:4px;box-shadow:var(--shadow)}
 .seg button{flex:1;min-height:40px;padding:6px 4px;background:transparent;color:var(--muted);font-size:14px;border-radius:10px}
 .seg button.on{background:var(--pitch);color:#fff}
-nav.bottom{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--card);border-top:1px solid var(--line);
+nav.bottom{flex:none;position:relative;z-index:30;background:var(--card);border-top:1px solid var(--line);
   display:flex;justify-content:center;padding:6px 6px calc(6px + env(safe-area-inset-bottom));box-shadow:0 -2px 10px rgba(0,0,0,.06)}
 nav.bottom .in{display:flex;max-width:640px;width:100%}
 nav.bottom button{flex:1;flex-direction:column;gap:2px;background:transparent;color:var(--muted);font-size:11.5px;font-weight:600;min-height:58px;padding:4px 2px;border-radius:12px}
@@ -124,7 +125,8 @@ nav.bottom button.on{color:var(--pitch);background:var(--pitch-l)}
 .slider .face{font-size:30px}
 input[type=range]{padding:0;border:none;min-height:36px;accent-color:var(--pitch);background:transparent}
 /* banners */
-#banners{max-width:640px;margin:0 auto;padding:0 16px}
+#banners{flex:none;width:100%;max-width:640px;margin:0 auto;padding:0 16px}
+#banners:not(:empty){padding-bottom:10px}
 .banner{display:flex;gap:10px;align-items:center;background:var(--water);color:#fff;border-radius:16px;padding:12px 12px 12px 14px;margin-top:12px;box-shadow:var(--shadow);animation:slide .35s}
 .banner.food{background:var(--orange)}.banner.warn{background:var(--red)}
 .banner .b{flex:1}.banner .b strong{display:block}
@@ -181,7 +183,7 @@ details[open] summary::after{content:"－"}
 .clock{font-size:56px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;margin:10px 0}
 .toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#14231a;color:#fff;padding:12px 18px;border-radius:14px;z-index:60;font-weight:600;max-width:90vw;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.25);animation:slide .3s}
 body.auth nav.bottom,body.auth #banners{display:none}
-body.auth{padding-bottom:24px}
+body.auth main{padding-bottom:32px}
 #confetti{position:fixed;inset:0;pointer-events:none;z-index:70}
 .hidden{display:none!important}
 .tag{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--pitch-l);color:var(--pitch-d)}
@@ -1426,7 +1428,7 @@ function profHistory(b) {
   const lab = ks.map(k => n === 7 ? WEEKDAYS[parseKey(k).getDay()] : fmtDate(k, { day: 'numeric', month: 'short' }));
   const earned = BADGES.filter(x => S.badges[x.id]).length;
   b.innerHTML = `
-  <div class="seg" style="margin-bottom:14px">${[7, 30].map(x => `<button class="${n === x ? 'on' : ''}" data-act="hist" data-val="${x}">${x} days</button>`).join('')}</div>
+  <div class="seg" style="margin-bottom:14px;position:static">${[7, 30].map(x => `<button class="${n === x ? 'on' : ''}" data-act="hist" data-val="${x}">${x} days</button>`).join('')}</div>
   <div class="card"><h2>🔥 Streaks</h2>${streakRow()}</div>
   <div class="card"><h2>💧 Water (glasses)</h2><div class="chartbox"><canvas id="chWater"></canvas></div></div>
   <div class="card"><h2>😴 Sleep (hours)</h2><div class="chartbox"><canvas id="chSleep"></canvas></div></div>
@@ -1539,9 +1541,9 @@ function openMyGlass() {
 }
 let waterPhotoFor = 'drink';
 const ACT = {
-  tab(el, e) { e.preventDefault(); keepFoodName(); UI.tab = el.dataset.tab; saveUI(); render(); scrollTo(0, 0); },
+  tab(el, e) { e.preventDefault(); keepFoodName(); UI.tab = el.dataset.tab; saveUI(); render(); $('#view').scrollTo(0, 0); },
   seg(el) { keepFoodName(); UI[el.dataset.key] = el.dataset.val; saveUI(); render(); },
-  goFit(el) { UI.tab = 'fitness'; UI.fit = el.dataset.val; saveUI(); render(); scrollTo(0, 0); },
+  goFit(el) { UI.tab = 'fitness'; UI.fit = el.dataset.val; saveUI(); render(); $('#view').scrollTo(0, 0); },
   hist(el) { UI.hist = +el.dataset.val; saveUI(); render(); },
   water(el) { addWater(+el.dataset.ml); },
   waterUndo() {
@@ -1615,7 +1617,7 @@ const ACT = {
   },
   dismissBanner(el) { const i = banners.findIndex(b => b.id === el.dataset.id); if (i > -1) banners.splice(i, 1); renderBanners(); },
   bannerWater(el) { ACT.dismissBanner(el); addWater(glassMl()); toast('💧 +1 glass'); },
-  bannerFood(el) { ACT.dismissBanner(el); UI.tab = 'food'; UI.food = 'log'; UI.pending = null; render(); scrollTo(0, 0); },
+  bannerFood(el) { ACT.dismissBanner(el); UI.tab = 'food'; UI.food = 'log'; UI.pending = null; render(); $('#view').scrollTo(0, 0); },
   // food
   pickMeal(el) { keepFoodName(); UI.pending.meal = el.dataset.val; renderFood($('#view')); hydratePhotos(); },
   quick(el) {
