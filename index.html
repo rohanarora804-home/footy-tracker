@@ -202,7 +202,7 @@ hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 </style>
 </head>
 <body>
-<header class="top"><div class="row"><span style="font-size:24px">⚽</span><h1 id="hdrTitle">Footy Tracker</h1><span class="date" id="hdrDate"></span></div></header>
+<header class="top"><div class="row"><span style="font-size:24px">⚽</span><h1 id="hdrTitle">Footy Tracker</h1><span class="date" id="hdrDate"></span><span id="syncDot" style="font-size:15px"></span></div></header>
 <div id="banners"></div>
 <main id="view"></main>
 <nav class="bottom"><div class="in" id="nav"></div></nav>
@@ -276,10 +276,12 @@ function load() {
 }
 let S = structuredClone(DEFAULT); // loaded for the signed-in account in startApp()
 function save() {
+  S.savedAt = new Date().toISOString();
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save — is storage full?'); }
+  markDirty();
 }
 const getDay = k => S.days[k] || null;
-function day(k = today()) { return S.days[k] || (S.days[k] = { water: 0, meals: [], fired: [] }); }
+function day(k = today()) { return S.days[k] || (S.days[k] = { water: 0, meals: [] }); }
 
 let UI = { tab: 'today', food: 'log', fit: 'workout', prof: 'me', hist: 7, testSel: 'sprint20', pending: null };
 const saveUI = () => { try { localStorage.setItem(KEY + '.ui', JSON.stringify({ ...UI, pending: null })); } catch (e) { } };
@@ -752,7 +754,7 @@ function reminderPlan(k = today()) {
 }
 function nextReminder() {
   if (!S.settings.reminders) return null;
-  const k = today(), n = nowMin(), fired = getDay(k)?.fired || [];
+  const k = today(), n = nowMin(), fired = firedIds(k);
   return reminderPlan(k).find(r => r.at > n && !fired.includes(r.id) && (!r.cond || r.cond())) || null;
 }
 let swReg = null;
@@ -777,18 +779,19 @@ function renderBanners() {
     ${b.kind === 'food' ? `<button data-act="bannerFood" data-id="${b.id}">Log</button>` : b.kind === 'warn' ? '' : `<button data-act="bannerWater" data-id="${b.id}">+1</button>`}
     <button class="icon-btn" style="color:#fff" data-act="dismissBanner" data-id="${b.id}" aria-label="Dismiss">✕</button></div>`).join('');
 }
+// Which reminders this phone has already shown today. Kept per phone, not synced.
+function firedIds(k) { try { const f = JSON.parse(localStorage.getItem(KEY + '.fired')); return f && f.date === k ? f.ids : []; } catch (e) { return []; } }
 function tickReminders() {
   if (!S.settings.reminders) return;
   const k = today(), n = nowMin(), due = [];
-  let changed = false;
+  const fired = firedIds(k), before = fired.length;
   for (const r of reminderPlan(k)) {
     if (r.at > n) break;
-    const d = day(k); d.fired = d.fired || [];
-    if (d.fired.includes(r.id)) continue;
-    d.fired.push(r.id); changed = true;
+    if (fired.includes(r.id)) continue;
+    fired.push(r.id);
     if (n - r.at <= 20 && (!r.cond || r.cond())) due.push(r);
   }
-  if (changed) save();
+  if (fired.length !== before) try { localStorage.setItem(KEY + '.fired', JSON.stringify({ date: k, ids: fired })); } catch (e) { }
   const r = due[due.length - 1];
   if (r) {
     showBanner(r);
@@ -1461,7 +1464,7 @@ function profSettings(b) {
     <label class="f">Reminder every<select data-change="setting" data-f="interval">${[[60, '1 hour'], [90, '1½ hours'], [120, '2 hours']].map(([m, l]) => `<option value="${m}" ${+S.settings.interval === m ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     <div class="grid2"><label class="f">Quiet from<input type="time" data-change="setting" data-f="quietStart" value="${esc(S.settings.quietStart)}"></label>
     <label class="f">Quiet until<input type="time" data-change="setting" data-f="quietEnd" value="${esc(S.settings.quietEnd)}"></label></div>
-    <details><summary>Today's reminder plan</summary>${reminderPlan().map(r => `<div class="small" style="padding:3px 0">${(getDay(today())?.fired || []).includes(r.id) ? '✓' : '•'} <b>${fmtTime(r.at)}</b> ${esc(r.title)}</div>`).join('') || '<p class="small muted">None.</p>'}</details>
+    <details><summary>Today's reminder plan</summary>${reminderPlan().map(r => `<div class="small" style="padding:3px 0">${firedIds(today()).includes(r.id) ? '✓' : '•'} <b>${fmtTime(r.at)}</b> ${esc(r.title)}</div>`).join('') || '<p class="small muted">None.</p>'}</details>
     <p class="small muted">Reminders always pop up inside the app while it's open. Phones may hold back web notifications when the app is fully closed, so keep it open in the background on training days.</p>
   </div>
   <div class="card"><h2>📲 Add to home screen</h2>
@@ -1469,13 +1472,13 @@ function profSettings(b) {
     <button class="btn block ${deferredInstall ? '' : 'hidden'}" data-act="install">Install app</button>
   </div>
   <div class="card"><h2>👤 Account</h2>
-    <p>Logged in as <b>${esc(accts().users[ACCOUNT]?.display || ACCOUNT)}</b></p>
+    <p>Logged in as <b>${esc(ACCOUNT)}</b></p>
     <div class="grid2"><button class="btn" data-act="logOut">Log out</button><button class="btn" data-act="changePw">Change password</button></div>
-    <button class="btn ghost block" style="margin-top:8px;color:var(--red)" data-act="deleteMe">Delete my account</button>
-    <p class="small muted">Accounts are kept on this device only.</p>
+    <button class="btn ghost block" style="margin-top:8px;color:var(--red)" data-act="deleteMe">Delete my data</button>
+    <p class="small muted">Log in with the same username and password on any phone to see the same data. ☁️ in the top bar means it's saved to your account; 📴 means you're offline and it will sync later. Photos stay on the phone they were taken on.</p>
   </div>
   <div class="card"><h2>💾 Your data</h2>
-    <p class="small muted">Everything is saved only on this device. Make a backup now and then — and before changing phones.</p>
+    <p class="small muted">Your data is saved to your account. A backup file also includes this phone's photos.</p>
     <div class="grid2"><button class="btn" data-act="export">⬇️ Export backup</button><label class="btn" for="importInput">⬆️ Import backup</label></div>
     <hr>
     <div class="grid2"><button class="btn ghost" data-act="resetToday">Reset today</button><button class="btn ghost" style="color:var(--red)" data-act="resetAll">Reset everything</button></div>
@@ -1863,132 +1866,248 @@ function tick() {
   if (UI.tab === 'today' && !document.activeElement?.matches('input,select,textarea,#modal *') && (nextReminder()?.id || null) !== shownReminder) render();
 }
 
-/* ---------- accounts (kept on this device; passwords stored as salted PBKDF2 hashes) ---------- */
-const ACCTS_KEY = 'footyTracker.accounts', SESSION_KEY = 'footyTracker.session';
-function accts() { try { return JSON.parse(localStorage.getItem(ACCTS_KEY)) || { users: {} }; } catch (e) { return { users: {} }; } }
-function saveAccts(a) { localStorage.setItem(ACCTS_KEY, JSON.stringify(a)); }
-const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
-async function hashPw(pw, saltB64) {
-  const salt = saltB64 ? Uint8Array.from(atob(saltB64), c => c.charCodeAt(0)) : crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 150000 }, key, 256);
-  return { salt: b64(salt), hash: b64(bits) };
-}
+/* ---------- accounts: Supabase logins that work on every phone ----------
+   Data is offline-first: it always saves on the phone, then syncs to the player's own row in
+   tracker_state (row-level security lets an account read and write only its own row).
+   Photos stay on the phone they were taken on. */
+const SB_URL = 'https://cxymzxgypjrqezslsgqn.supabase.co', SB_KEY = 'sb_publishable_Y0BpgYpkr3tzwYApKdKb4A_KvGD4ymO';
+const SESSION_KEY = 'footyTracker.cloudSession', LOCAL_MAP = 'footyTracker.cloudLocal', OLD_ACCTS = 'footyTracker.accounts';
+const emailFor = u => `${u}@footytracker.app`; // usernames only; no email is ever sent
 const normUser = u => String(u || '').trim().toLowerCase();
-function sessionUser() { try { return sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY); } catch (e) { return null; } }
+const readJSON = (store, k, d) => { try { return JSON.parse(store.getItem(k)) ?? d; } catch (e) { return d; } };
+let SESSION = null, dirty = false, saveVer = 0, pushTimer = null, pulled = false;
+const getBase = () => localStorage.getItem(KEY + '.base') || '';     // the cloud copy this phone last matched
+const setBase = v => { try { localStorage.setItem(KEY + '.base', v || ''); } catch (e) { } };
+
+function readSession() { return readJSON(sessionStorage, SESSION_KEY, null) || readJSON(localStorage, SESSION_KEY, null); }
+function writeSession(sess) {
+  SESSION = sess;
+  try { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); (sess.keep ? localStorage : sessionStorage).setItem(SESSION_KEY, JSON.stringify(sess)); } catch (e) { }
+}
+function clearSession() { SESSION = null; try { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); } catch (e) { } }
+async function sbAuth(path, body, method = 'POST', bearer) {
+  const r = await fetch(`${SB_URL}/auth/v1/${path}`, { method, headers: { apikey: SB_KEY, 'Content-Type': 'application/json', ...(bearer ? { Authorization: 'Bearer ' + bearer } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.msg || j.error_description || j.message || 'Request failed'); e.code = j.error_code || j.error; e.status = r.status; throw e; }
+  return j;
+}
+const toSession = (j, username, keep) => ({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: j.expires_at || Math.floor(Date.now() / 1000) + (j.expires_in || 3600), uid: j.user.id, username, keep });
+async function accessToken() {
+  if (!SESSION) throw new Error('signed out');
+  if (SESSION.expires_at - 60 > Date.now() / 1000) return SESSION.access_token;
+  try { writeSession(toSession(await sbAuth('token?grant_type=refresh_token', { refresh_token: SESSION.refresh_token }), SESSION.username, SESSION.keep)); }
+  catch (e) { if (e.status === 400 || e.status === 401) sessionExpired(); throw e; }
+  return SESSION.access_token;
+}
+async function sbRest(path, opts = {}) {
+  const r = await fetch(`${SB_URL}/rest/v1/${path}`, { cache: 'no-store', ...opts, headers: { apikey: SB_KEY, Authorization: 'Bearer ' + await accessToken(), 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  if (!r.ok) throw new Error('sync ' + r.status);
+  return r.status === 204 || r.headers.get('content-length') === '0' ? null : r.json().catch(() => null);
+}
+function setSync(st) {
+  const el = $('#syncDot'); if (!el) return;
+  el.textContent = { saving: '⏳', saved: '☁️', offline: '📴' }[st] || '';
+  el.title = { saving: 'Saving to your account…', saved: 'Saved to your account', offline: 'Offline — saved on this phone, will sync later' }[st] || '';
+}
+// Called by save(): queue an upload of the whole state.
+function markDirty() {
+  if (!SESSION) return;
+  dirty = true; saveVer++;
+  try { localStorage.setItem(KEY + '.dirty', '1'); } catch (e) { }
+  setSync('saving'); clearTimeout(pushTimer); pushTimer = setTimeout(pushCloud, 1500);
+}
+async function pushCloud() {
+  clearTimeout(pushTimer);
+  if (!SESSION || !dirty || !pulled) return; // never upload before seeing what the other phones saved
+  const v = saveVer, at = S.savedAt;
+  try {
+    await sbRest('tracker_state?on_conflict=user_id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ user_id: SESSION.uid, state: S, updated_at: new Date().toISOString() }) });
+    setBase(at);
+    if (v === saveVer) { dirty = false; try { localStorage.removeItem(KEY + '.dirty'); } catch (e) { } setSync('saved'); }
+    else pushTimer = setTimeout(pushCloud, 1500);
+  } catch (e) { setSync('offline'); }
+}
+// Both phones changed things since they last synced: keep everything from both.
+// Lists are joined by id, a day's meals and drinks are joined, settings follow this phone.
+function mergeStates(local, remote) {
+  const out = merge(structuredClone(DEFAULT), remote);
+  const byId = (mine = [], theirs = []) => { const m = new Map(); [...theirs, ...mine].forEach(x => m.set(x.id, x)); return [...m.values()]; };
+  for (const k of ['growth', 'sessions', 'matches', 'tests', 'workoutLog']) out[k] = byId(local[k], remote[k]);
+  for (const [k, ld] of Object.entries(local.days || {})) {
+    const rd = out.days[k];
+    if (!rd) { out.days[k] = ld; continue; }
+    const drinks = byId(ld.drinks, rd.drinks);
+    out.days[k] = { ...rd, ...ld, meals: byId(ld.meals, rd.meals), drinks,
+      water: Math.max(ld.water || 0, rd.water || 0, drinks.reduce((a, x) => a + (x.ml || 0), 0)) };
+  }
+  out.profile = local.profile; out.settings = local.settings; out.workout = local.workout;
+  out.badges = { ...(remote.badges || {}), ...(local.badges || {}) };
+  return out;
+}
+// Fetch the account's data before uploading anything. If another phone saved since this one last synced,
+// take its copy (or merge, when this phone has changes of its own too).
+let syncing = null;
+function syncDown() { return syncing || (syncing = doSyncDown().finally(() => { syncing = null; })); }
+async function doSyncDown() {
+  if (!SESSION) return;
+  try {
+    const row = (await sbRest('tracker_state?select=state'))?.[0];
+    pulled = true;
+    if (!row) { S.savedAt = S.savedAt || new Date().toISOString(); dirty = true; saveVer++; return pushCloud(); } // brand-new account: upload what this phone has
+    const remoteAt = row.state?.savedAt || '';
+    if (remoteAt > getBase()) {
+      if (dirty) { S = mergeStates(S, row.state); S.savedAt = new Date().toISOString(); saveVer++; }
+      else S = merge(structuredClone(DEFAULT), row.state);
+      try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { }
+      setBase(remoteAt);
+      if (!document.activeElement?.matches('input,select,textarea') && !$('#modal')) render();
+    }
+    if (dirty) return pushCloud();
+    setSync('saved');
+  } catch (e) { setSync('offline'); }
+}
+function sessionExpired() {
+  clearSession();
+  renderAuth('login', 'Please log in again. Your data on this phone is safe.');
+}
+// Where this account's data lives on this phone. The first login here adopts data saved before cloud accounts.
+function localFor(uid, username) {
+  const map = readJSON(localStorage, LOCAL_MAP, {});
+  if (map[uid]) return map[uid];
+  const old = readJSON(localStorage, OLD_ACCTS, { users: {} }).users || {};
+  const taken = new Set(Object.values(map).map(m => m.key));
+  let m;
+  if (old[username] && !taken.has(old[username].key)) m = { key: old[username].key, db: old[username].db };
+  else if (localStorage.getItem('footyTracker.v1') && !taken.has('footyTracker.v1') && !Object.entries(old).some(([u, x]) => x.key === 'footyTracker.v1' && u !== username)) m = { key: 'footyTracker.v1', db: 'footyTracker' };
+  else m = { key: 'footyTracker.v1.c.' + uid, db: 'footyTracker.c.' + uid };
+  map[uid] = { ...m, username };
+  if (!m.key.startsWith('footyTracker.v1.c.')) try { localStorage.setItem(m.key + '.dirty', '1'); } catch (e) { }
+  try { localStorage.setItem(LOCAL_MAP, JSON.stringify(map)); } catch (e) { }
+  return map[uid];
+}
+const usersHere = () => Object.values(readJSON(localStorage, LOCAL_MAP, {})).map(m => m.username).filter(Boolean);
+
 function renderAuth(mode = 'login', msg = '') {
   document.body.classList.add('auth');
-  const users = Object.entries(accts().users), canHash = !!(window.crypto && crypto.subtle);
-  if (!users.length && mode === 'login') mode = 'create';
-  const legacy = !accts().legacyClaimed && !!localStorage.getItem('footyTracker.v1');
-  $('#hdrTitle').textContent = 'Footy Tracker'; $('#hdrDate').textContent = '';
+  const users = usersHere();
+  const hasOld = !!localStorage.getItem('footyTracker.v1') || Object.keys(readJSON(localStorage, OLD_ACCTS, { users: {} }).users || {}).length > 0;
+  $('#hdrTitle').textContent = 'Footy Tracker'; $('#hdrDate').textContent = ''; setSync('');
   $('#view').innerHTML = `
   <div class="center" style="margin:18px 0 14px"><div style="font-size:64px">⚽</div><h2 style="font-size:24px;margin:4px 0">Footy Tracker</h2><p class="muted">Water, food, sleep, training and workouts.</p></div>
   <div class="seg">${[['login', 'Log in'], ['create', 'Create account']].map(([id, n]) => `<button class="${mode === id ? 'on' : ''}" data-act="authMode" data-val="${id}">${n}</button>`).join('')}</div>
   <div class="card">
-    ${!canHash ? '<div class="alert warn small">Logging in needs the app\'s secure https address (e.g. your github.io link). It won\'t work from a file opened on this computer.</div>' : ''}
     ${msg ? `<div class="alert warn small">${esc(msg)}</div>` : ''}
-    ${mode === 'login' && users.length ? `<p class="small muted" style="margin:0 0 6px">On this device:</p><div class="chips" style="margin-bottom:12px">${users.map(([u, x]) => `<button class="chip" data-act="pickUser" data-val="${esc(u)}">👤 ${esc(x.display || u)}</button>`).join('')}</div>` : ''}
-    ${mode === 'create' && legacy ? '<div class="alert info small">Your existing tracker data will move into this new account.</div>' : ''}
+    ${mode === 'login' && users.length ? `<p class="small muted" style="margin:0 0 6px">Used on this phone:</p><div class="chips" style="margin-bottom:12px">${users.map(u => `<button class="chip" data-act="pickUser" data-val="${esc(u)}">👤 ${esc(u)}</button>`).join('')}</div>` : ''}
+    ${mode === 'create' && hasOld && !users.length ? '<div class="alert info small">What\'s already saved on this phone will move into your new account.</div>' : ''}
     <form id="authForm" autocomplete="on">
       <label class="f">Username<input id="aUser" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="20" placeholder="e.g. arjun10"></label>
-      <label class="f">Password<input id="aPass" name="password" type="password" autocomplete="${mode === 'create' ? 'new-password' : 'current-password'}" required minlength="4"></label>
-      ${mode === 'create' ? '<label class="f">Password again<input id="aPass2" type="password" autocomplete="new-password" required minlength="4"></label>' : ''}
-      <label class="row small" style="margin:6px 0 14px"><input type="checkbox" id="aKeep" checked> Keep me logged in on this device</label>
-      <button class="btn primary block big" type="submit" ${canHash ? '' : 'disabled'}>${mode === 'create' ? 'Create account' : 'Log in'}</button>
+      <label class="f">Password<input id="aPass" name="password" type="password" autocomplete="${mode === 'create' ? 'new-password' : 'current-password'}" required minlength="6"></label>
+      ${mode === 'create' ? '<label class="f">Password again<input id="aPass2" type="password" autocomplete="new-password" required minlength="6"></label><p class="small muted" style="margin-top:-4px">At least 6 characters. Write it down somewhere safe.</p>' : ''}
+      <label class="row small" style="margin:6px 0 14px"><input type="checkbox" id="aKeep" checked> Keep me logged in</label>
+      <button class="btn primary block big" type="submit" id="aGo">${mode === 'create' ? 'Create account' : 'Log in'}</button>
     </form>
-    ${mode === 'login' && users.length ? '<button class="btn ghost block" style="margin-top:10px" data-act="forgotPw">Forgot password?</button>' : ''}
+    ${mode === 'login' ? '<button class="btn ghost block" style="margin-top:10px" data-act="forgotPw">Forgot password?</button>' : ''}
   </div>
-  <p class="small muted center">Accounts and data stay on this device — no email, no internet account. Each player on this phone or laptop can have their own.</p>`;
-  $('#authForm').onsubmit = async e => { e.preventDefault(); await submitAuth(mode); };
-}
-async function submitAuth(mode) {
-  const display = $('#aUser').value.trim(), u = normUser(display), pw = $('#aPass').value, keep = $('#aKeep').checked;
-  const A = accts();
-  if (!/^[a-z0-9_.-]{3,20}$/.test(u)) return renderAuthMsg(mode, 'Username: 3–20 letters, numbers, dots, dashes or underscores.', display);
-  if (pw.length < 4) return renderAuthMsg(mode, 'Password needs at least 4 characters.', display);
-  if (mode === 'create') {
-    if (A.users[u]) return renderAuthMsg(mode, 'That username is taken on this device. Try another, or log in.', display);
-    if (pw !== $('#aPass2').value) return renderAuthMsg(mode, 'The two passwords don\'t match.', display);
-    const { salt, hash } = await hashPw(pw);
-    const legacy = !A.legacyClaimed && !!localStorage.getItem('footyTracker.v1');
-    // The first account takes over data saved before accounts existed.
-    A.users[u] = { display, salt, hash, created: new Date().toISOString(), key: legacy ? 'footyTracker.v1' : 'footyTracker.v1.u.' + u, db: legacy ? 'footyTracker' : 'footyTracker.u.' + u };
-    if (legacy || Object.keys(A.users).length === 1) A.legacyClaimed = true;
-    saveAccts(A);
-  } else {
-    const x = A.users[u];
-    if (!x || (await hashPw(pw, x.salt)).hash !== x.hash) return renderAuthMsg(mode, 'Wrong username or password.', display);
-  }
-  try { (keep ? localStorage : sessionStorage).setItem(SESSION_KEY, u); } catch (e) { }
-  startApp(u, mode === 'create');
+  <p class="small muted center">Log in with the same username and password on any phone or laptop to see the same data. Photos stay on the phone they were taken on.</p>`;
+  $('#authForm').onsubmit = e => { e.preventDefault(); submitAuth(mode); };
 }
 function renderAuthMsg(mode, msg, user) { renderAuth(mode, msg); $('#aUser').value = user || ''; $('#aPass').focus(); }
+async function submitAuth(mode) {
+  const u = normUser($('#aUser').value), pw = $('#aPass').value, keep = $('#aKeep').checked;
+  if (!/^[a-z0-9_.-]{3,20}$/.test(u)) return renderAuthMsg(mode, 'Username: 3–20 letters, numbers, dots, dashes or underscores (no spaces).', u);
+  if (pw.length < 6) return renderAuthMsg(mode, 'Password needs at least 6 characters.', u);
+  if (mode === 'create' && pw !== $('#aPass2').value) return renderAuthMsg(mode, 'The two passwords don\'t match.', u);
+  const go = $('#aGo'); go.disabled = true; go.textContent = mode === 'create' ? 'Creating…' : 'Logging in…';
+  try {
+    const j = mode === 'create' ? await sbAuth('signup', { email: emailFor(u), password: pw, data: { username: u } })
+      : await sbAuth('token?grant_type=password', { email: emailFor(u), password: pw });
+    if (!j.access_token) throw Object.assign(new Error('no session'), { code: 'no_session' });
+    writeSession(toSession(j, u, keep));
+    startApp(mode === 'create');
+  } catch (e) {
+    const m = !navigator.onLine || e instanceof TypeError ? 'No internet connection. You need to be online to log in on a phone for the first time.'
+      : e.code === 'user_already_exists' || /already registered/i.test(e.message) ? 'That username is taken. Try another one, or log in.'
+      : e.code === 'invalid_credentials' || e.status === 400 ? 'Wrong username or password.'
+      : e.code === 'weak_password' ? 'That password is too easy to guess. Try a longer one.'
+      : e.status === 429 ? 'Too many tries. Wait a minute and try again.'
+      : 'Something went wrong (' + e.message + '). Try again.';
+    renderAuthMsg(mode, m, u);
+  }
+}
 async function logOut() {
-  try { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); } catch (e) { }
-  location.reload();
+  if (dirty && navigator.onLine) await pushCloud();
+  try { if (SESSION) await sbAuth('logout', null, 'POST', SESSION.access_token); } catch (e) { }
+  clearSession(); location.reload();
 }
-async function deleteAccount(u) {
-  const A = accts(), x = A.users[u]; if (!x) return;
-  localStorage.removeItem(x.key); localStorage.removeItem(x.key + '.ui');
-  try { indexedDB.deleteDatabase(x.db); } catch (e) { }
-  delete A.users[u]; saveAccts(A);
-}
-function startApp(u, isNew) {
-  const x = accts().users[u]; if (!x) { renderAuth(); return; }
-  ACCOUNT = u; KEY = x.key; DB_NAME = x.db; idb._db = null;
+let started = false;
+function startApp(isNew) {
+  const m = localFor(SESSION.uid, SESSION.username);
+  ACCOUNT = SESSION.username; KEY = m.key; DB_NAME = m.db; idb._db = null;
   document.body.classList.remove('auth');
   S = load();
+  dirty = !!localStorage.getItem(KEY + '.dirty');
   // Workouts finished before the log existed become log entries.
-  S.sessions.filter(s => s.workout && !s.logId).forEach(s => { s.logId = uid(); S.workoutLog.push({ id: s.logId, date: s.date, title: 'Workout', minutes: s.duration, effort: s.intensity || 'medium', notes: '', items: [] }); });
-  if (!S.profile.name) S.profile.name = x.display.charAt(0).toUpperCase() + x.display.slice(1);
-  save();
+  S.sessions.filter(x => x.workout && !x.logId).forEach(x => { x.logId = uid(); S.workoutLog.push({ id: x.logId, date: x.date, title: 'Workout', minutes: x.duration, effort: x.intensity || 'medium', notes: '', items: [] }); });
+  if (!S.profile.name) S.profile.name = ACCOUNT.charAt(0).toUpperCase() + ACCOUNT.slice(1);
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { }
   try { Object.assign(UI, JSON.parse(localStorage.getItem(KEY + '.ui')) || {}); UI.pending = null; } catch (e) { }
   if (isNew) { UI.tab = 'today'; toast(`Welcome, ${S.profile.name}! ⚽`); }
   render(); checkBadges(); tick();
-  setInterval(tick, 30000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });
+  syncDown();
+  if (started) return; started = true;
+  setInterval(() => { tick(); if (dirty) (pulled ? pushCloud() : syncDown()); }, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { tick(); syncDown(); }
+    else { if (dirty) pushCloud(); pulled = false; } // after time away, download again before the next upload
+  });
+  addEventListener('online', () => syncDown());
 }
 Object.assign(ACT, {
   authMode(el) { renderAuth(el.dataset.val); },
   pickUser(el) { $('#aUser').value = el.dataset.val; $('#aPass').focus(); },
   forgotPw() {
-    const users = Object.entries(accts().users);
-    modal(`<h2>Forgot password?</h2><p class="small">There's no email or server, so a password can't be recovered or reset. If it's really gone, you can remove that account from this device and start again — <b>its data will be deleted</b>.</p>
-      <label class="f">Account to remove<select id="fpUser">${users.map(([u, x]) => `<option value="${esc(u)}">${esc(x.display || u)}</option>`).join('')}</select></label>
-      <label class="f">Type the username again to confirm<input id="fpConfirm" autocapitalize="none"></label>
-      <div class="grid2"><button class="btn ghost" data-act="closeModal">Cancel</button><button class="btn danger" id="fpGo">Remove account</button></div>`, m => {
-      $('#fpGo', m).onclick = async () => {
-        const u = $('#fpUser', m).value; if (normUser($('#fpConfirm', m).value) !== u) { toast('Type the username exactly to confirm'); return; }
-        await deleteAccount(u); closeModal(); toast('Account removed'); renderAuth('login');
-      };
-    });
+    modal(`<h2>Forgot password?</h2><p>There's no email, so the app can't reset it by itself.</p>
+      <p>Ask the parent who set the app up: they can set a new password in Supabase (the online database the app uses). Your data is safe in the meantime.</p>
+      <button class="btn primary block" data-act="closeModal">OK</button>`);
   },
   logOut() { logOut(); },
   changePw() {
     modal(`<h2>Change password</h2>
       <label class="f">Current password<input type="password" id="cp0" autocomplete="current-password"></label>
-      <label class="f">New password<input type="password" id="cp1" autocomplete="new-password"></label>
+      <label class="f">New password<input type="password" id="cp1" autocomplete="new-password" minlength="6"></label>
       <label class="f">New password again<input type="password" id="cp2" autocomplete="new-password"></label>
       <div class="grid2"><button class="btn ghost" data-act="closeModal">Cancel</button><button class="btn primary" id="cpGo">Save</button></div>`, m => {
       $('#cpGo', m).onclick = async () => {
-        const A = accts(), x = A.users[ACCOUNT];
-        if ((await hashPw($('#cp0', m).value, x.salt)).hash !== x.hash) { toast('Current password is wrong'); return; }
-        const p1 = $('#cp1', m).value; if (p1.length < 4) { toast('At least 4 characters'); return; } if (p1 !== $('#cp2', m).value) { toast('New passwords don\'t match'); return; }
-        Object.assign(x, await hashPw(p1)); saveAccts(A); closeModal(); toast('🔑 Password changed');
+        const p1 = $('#cp1', m).value;
+        if (p1.length < 6) { toast('At least 6 characters'); return; }
+        if (p1 !== $('#cp2', m).value) { toast('New passwords don\'t match'); return; }
+        try {
+          const j = await sbAuth('token?grant_type=password', { email: emailFor(ACCOUNT), password: $('#cp0', m).value });
+          writeSession(toSession(j, ACCOUNT, SESSION.keep));
+          await sbAuth('user', { password: p1 }, 'PUT', SESSION.access_token);
+          closeModal(); toast('🔑 Password changed — use it on every phone');
+        } catch (e) { toast(e.status === 400 && !e.code?.includes('weak') ? 'Current password is wrong' : 'Could not change it (' + e.message + ')'); }
       };
     });
   },
   deleteMe() {
-    confirmBox('Delete your account?', 'This removes your account and ALL its data and photos from this device.', 'Continue', () => {
-      confirmBox('Are you really sure?', 'There is no undo. Export a backup first if you might want it back.', 'Yes, delete my account', async () => { await deleteAccount(ACCOUNT); logOut(); });
+    confirmBox('Delete your data?', 'This erases everything in your account — on every phone — plus the photos on this phone.', 'Continue', () => {
+      confirmBox('Are you really sure?', 'There is no undo. Export a backup first if you might want it back.', 'Yes, delete it all', async () => {
+        try { await sbRest('tracker_state?user_id=eq.' + SESSION.uid, { method: 'DELETE' }); }
+        catch (e) { toast('Need internet to delete your account data'); return; }
+        localStorage.removeItem(KEY); localStorage.removeItem(KEY + '.ui'); localStorage.removeItem(KEY + '.dirty');
+        try { indexedDB.deleteDatabase(DB_NAME); } catch (e) { }
+        const map = readJSON(localStorage, LOCAL_MAP, {}); delete map[SESSION.uid]; localStorage.setItem(LOCAL_MAP, JSON.stringify(map));
+        dirty = false; await logOut();
+      });
     });
   },
 });
 
 setupPWA();
-const who = sessionUser();
-if (who && accts().users[who]) startApp(who); else renderAuth();
+SESSION = readSession();
+if (SESSION?.uid) startApp(); else renderAuth();
 </script>
 </body>
 </html>

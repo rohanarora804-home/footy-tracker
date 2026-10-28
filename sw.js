@@ -1,6 +1,6 @@
 // Footy Tracker service worker: makes the app open offline after the first visit,
 // and lets notifications open the app when tapped.
-const CACHE = 'footy-v2';
+const CACHE = 'footy-v3';
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', './index.html'])).then(() => self.skipWaiting()));
@@ -19,6 +19,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || !req.url.startsWith('http')) return;
+  if (new URL(req.url).hostname.endsWith('.supabase.co')) return; // account data: always live, never cached
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req, { cache: 'no-cache' }).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put('./index.html', copy)); }
