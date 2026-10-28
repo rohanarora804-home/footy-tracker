@@ -1447,10 +1447,10 @@ function workoutProfileCard() {
     <div class="chips"><button class="chip ${W.mode === 'own' ? 'on' : ''}" data-act="wkMode" data-val="own">Yes — I'll add mine</button>
       <button class="chip ${W.mode === 'suggest' ? 'on' : ''}" data-act="wkMode" data-val="suggest">No — suggest one</button></div>
     ${own}
-    <hr><h3 style="margin-top:0">A few quick questions</h3>
-    <p class="small muted">${W.mode === 'own' ? 'Used for suggested workouts, if you ever want to try one.' : 'Your suggested workout is made from these.'}</p>
+    ${W.mode === 'suggest' ? `<hr><h3 style="margin-top:0">A few quick questions</h3>
+    <p class="small muted">Your suggested workout is made from these.</p>
     ${q('What do you want to get better at? (pick any)', 'goals', WK_GOALS, true)}
-    ${W.mode === 'own' ? '' : q('How many extra workouts a week?', 'perWeek', [[1, '1'], [2, '2'], [3, '3'], [4, '4']], false)}
+    ${q('How many extra workouts a week?', 'perWeek', [[1, '1'], [2, '2'], [3, '3'], [4, '4']], false)}
     ${q('How long can each workout be?', 'minutes', a.minutesOther ? [[15, '15 min'], [20, '20 min'], [30, '30 min'], [45, '45 min']].map(([v, n]) => [v + 'x', n]) : [[15, '15 min'], [20, '20 min'], [30, '30 min'], [45, '45 min']], false,
       '', `<button class="chip ${a.minutesOther ? 'on' : ''}" data-act="wkAns" data-f="minutes" data-val="other">✏️ Other</button>`)}
     ${a.minutesOther ? `<label class="f" style="margin-top:8px">Minutes<input type="number" inputmode="numeric" min="5" max="120" data-change="wkMinOther" value="${esc(a.minutes)}"></label>` : ''}
@@ -1461,8 +1461,8 @@ function workoutProfileCard() {
     ${q('What do you have? (pick any)', 'equipment', WK_EQUIP, true)}
     ${q('How much have you done workouts like this?', 'level', WK_LEVELS, false)}
     ${q('Does anything hurt or is anything injured?', 'niggles', WK_NIGGLES, true, `<button class="chip ${a.niggles.length ? '' : 'on'}" data-act="wkAns" data-f="niggles" data-val="none">No, all good</button>`)}
-    ${a.niggles.length ? '<div class="alert warn small" style="margin-top:12px">Tell a parent or your coach, and see a doctor or physio if it keeps hurting. Exercises that could make it worse are left out.</div>' : ''}
-    <button class="btn primary block" style="margin-top:14px" data-act="goFit" data-val="workout">See my workout →</button>
+    ${a.niggles.length ? '<div class="alert warn small" style="margin-top:12px">Tell a parent or your coach, and see a doctor or physio if it keeps hurting. Exercises that could make it worse are left out.</div>' : ''}` : ''}
+    ${W.mode ? '<button class="btn primary block" style="margin-top:14px" data-act="goFit" data-val="workout">See my workout →</button>' : ''}
   </div>`;
 }
 function profHistory(b) {
