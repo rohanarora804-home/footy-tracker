@@ -197,6 +197,7 @@ input[type=checkbox]{width:24px;height:24px;min-height:0;padding:0;margin:0;acce
 .drink{display:flex;align-items:center;gap:8px;background:var(--bg);border-radius:12px;padding:6px}
 .drink img,.drink .noimg{width:44px;height:44px;border-radius:10px;object-fit:cover;flex:none;display:flex;align-items:center;justify-content:center;background:var(--water-l)}
 .drink .small{flex:1;line-height:1.25}
+.sched{border:2px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
 .chk.on{background:var(--pitch);border-color:var(--pitch)}
 .item.done .t{text-decoration:line-through;opacity:.6}
 .item details{border:none;padding:0}.item summary{padding:2px 0;font-weight:600;color:var(--muted)}
@@ -272,11 +273,17 @@ function merge(a, b) {
   }
   return a;
 }
-function load() {
-  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s) return merge(structuredClone(DEFAULT), s); } catch (e) { }
-  return structuredClone(DEFAULT);
+// Older data had one training schedule; it becomes the first entry in the list.
+function fixState(st) {
+  const P = st.profile;
+  if (!Array.isArray(P.schedules)) P.schedules = [{ id: 'club', name: P.team || 'Club training', days: P.trainingDays || [], time: P.trainingTime || '17:00', duration: +P.trainingDuration || 90 }];
+  return st;
 }
-let S = structuredClone(DEFAULT); // loaded for the signed-in account in startApp()
+function load() {
+  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s) return fixState(merge(structuredClone(DEFAULT), s)); } catch (e) { }
+  return fixState(structuredClone(DEFAULT));
+}
+let S = fixState(structuredClone(DEFAULT)); // loaded for the signed-in account in startApp()
 function save() {
   S.savedAt = new Date().toISOString();
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save — is storage full?'); }
@@ -288,13 +295,32 @@ function day(k = today()) { return S.days[k] || (S.days[k] = { water: 0, meals: 
 let UI = { tab: 'today', food: 'log', fit: 'workout', prof: 'me', hist: 7, testSel: 'sprint20', pending: null };
 const saveUI = () => { try { localStorage.setItem(KEY + '.ui', JSON.stringify({ ...UI, pending: null })); } catch (e) { } };
 
-/* ---------- day type & water goal ---------- */
+/* ---------- training schedules (club, school, academy…) & day type ---------- */
+const schedules = () => S.profile.schedules || [];
+const trainingWeekdays = () => [...new Set(schedules().flatMap(x => x.days))];
+// Planned sessions on a weekday, earliest first.
+function plannedOn(dow) {
+  return schedules().filter(x => x.days.includes(dow)).map(x => {
+    const start = hm2min(x.time || '17:00');
+    return { id: x.id, name: x.name || 'Training', start, end: start + (+x.duration || 90), duration: +x.duration || 90 };
+  }).sort((a, b) => a.start - b.start);
+}
 function dayType(k) {
   const d = getDay(k);
   if (d && d.type) return d.type;
   if (S.matches.some(m => m.date === k)) return 'match';
-  return S.profile.trainingDays.includes(parseKey(k).getDay()) ? 'training' : 'rest';
+  return plannedOn(parseKey(k).getDay()).length ? 'training' : 'rest';
 }
+// The sessions reminders and tips plan around today. A day switched to Training or Match with nothing
+// scheduled borrows the first schedule's time.
+function sessionsOn(k) {
+  const t = dayType(k); if (t === 'rest') return [];
+  const list = plannedOn(parseKey(k).getDay());
+  if (list.length) return list;
+  const f = schedules()[0], start = hm2min(f?.time || '17:00'), duration = +f?.duration || 90;
+  return [{ id: 'extra', name: t === 'match' ? 'Match' : 'Training', start, end: start + duration, duration }];
+}
+const hasMealSince = (k, m, min) => !!getDay(k)?.meals?.some(x => x.meal === m && hm2min(x.time) >= min);
 function latestWeight() {
   const g = [...S.growth].sort((a, b) => a.date.localeCompare(b.date)).filter(x => x.weight);
   return g.length ? +g[g.length - 1].weight : null;
@@ -360,10 +386,10 @@ const mealById = id => MEALS.find(m => m.id === id) || MEALS[5];
 const hasMeal = (k, m) => !!getDay(k)?.meals?.some(x => x.meal === m);
 const dayGroups = k => { const s = new Set(); (getDay(k)?.meals || []).forEach(m => (m.groups || []).forEach(g => s.add(g))); return s; };
 function suggestMeal() {
-  const n = nowMin(), k = today(), t = dayType(k), ts = hm2min(S.profile.trainingTime), te = ts + (+S.profile.trainingDuration || 90);
-  if (t !== 'rest') {
-    if (n >= ts - 150 && n < ts && !hasMeal(k, 'pre')) return 'pre';
-    if (n >= te - 15 && n <= te + 90 && !hasMeal(k, 'post')) return 'post';
+  const n = nowMin(), k = today();
+  for (const x of sessionsOn(k)) {
+    if (n >= x.start - 150 && n < x.start && !hasMealSince(k, 'pre', x.start - 180)) return 'pre';
+    if (n >= x.end - 15 && n <= x.end + 90 && !hasMealSince(k, 'post', x.end - 15)) return 'post';
   }
   if (n < 630 && !hasMeal(k, 'breakfast')) return 'breakfast';
   if (n >= 690 && n < 900 && !hasMeal(k, 'lunch')) return 'lunch';
@@ -592,7 +618,7 @@ function wkTitle() {
 function workoutDays() {
   const W = S.workout;
   if (W.mode === 'own' && W.ownDays.length) return W.ownDays;
-  const n = clamp(+wkAnswers().perWeek || 2, 1, 5), free = [1, 2, 3, 4, 5, 6].filter(d => !S.profile.trainingDays.includes(d));
+  const n = clamp(+wkAnswers().perWeek || 2, 1, 5), free = [1, 2, 3, 4, 5, 6].filter(d => !trainingWeekdays().includes(d));
   const k = Math.min(n, free.length);
   return Array.from({ length: k }, (_, i) => free[Math.floor(i * free.length / k)]);
 }
@@ -731,20 +757,20 @@ function inQuiet(min) {
   return a < b ? (min >= a && min < b) : (min >= a || min < b);
 }
 function reminderPlan(k = today()) {
-  const list = [], t = dayType(k), P = S.profile;
-  const ts = hm2min(P.trainingTime || '17:00'), te = ts + (+P.trainingDuration || 90);
-  const training = t !== 'rest';
-  const what = t === 'match' ? 'Match' : 'Training';
-  if (training) {
-    list.push({ at: ts - 120, id: 'pre-snack', kind: 'food', title: `${what} at ${fmtTime(ts)} — fuel up`, body: 'Have a pre-training snack: banana, peanut butter toast or a small bowl of poha.', cond: () => !hasMeal(k, 'pre') });
-    list.push({ at: ts - 90, id: 'pre-water', title: `${what} soon 💧`, body: 'Drink 1–2 glasses now.' });
-    for (let m = ts + 20; m < te - 5; m += 20) list.push({ at: m, id: 'during-' + m, title: 'Sip time 💧', body: 'Sip water every 15–20 minutes while you play.' });
-    list.push({ at: te + 10, id: 'post', title: 'Great session! 💪', body: 'Drink 2 glasses and have a recovery snack — milk, lassi, eggs or a paneer sandwich.' });
-  }
+  const list = [], sess = sessionsOn(k);
+  sess.forEach((x, i) => {
+    const gap = i ? x.start - sess[i - 1].end : Infinity; // back-to-back sessions share one build-up
+    if (gap > 120) list.push({ at: x.start - 120, id: 'pre-snack-' + x.id, kind: 'food', title: `${x.name} at ${fmtTime(x.start)} — fuel up`, body: 'Have a pre-training snack: banana, peanut butter toast or a small bowl of poha.', cond: () => !hasMealSince(k, 'pre', x.start - 180) });
+    if (gap >= 45) list.push({ at: Math.max(x.start - 90, x.start - gap + 30), id: 'pre-water-' + x.id, title: `${x.name} soon 💧`, body: 'Drink 1–2 glasses now.' });
+    for (let m = x.start + 20; m < x.end - 5; m += 20) list.push({ at: m, id: 'during-' + x.id + '-' + m, title: 'Sip time 💧', body: 'Sip water every 15–20 minutes while you play.' });
+    const nx = sess[i + 1], soon = nx && nx.start - x.end <= 150;
+    list.push({ at: x.end + 10, id: 'post-' + x.id, kind: soon ? 'food' : undefined, title: `${x.name} done! 💪`,
+      body: soon ? `Drink 2 glasses and have a snack to refuel for ${nx.name} at ${fmtTime(nx.start)} — banana, milk, a sandwich or a few dates.` : 'Drink 2 glasses and have a recovery snack — milk, lassi, eggs or a paneer sandwich.' });
+  });
   const wake = hm2min(S.settings.quietEnd); let sleep = hm2min(S.settings.quietStart); if (sleep <= wake) sleep += 1440;
   const iv = clamp(+S.settings.interval || 120, 60, 240);
   for (let m = wake + 60; m <= Math.min(sleep - 30, 1439); m += iv) {
-    if (training && m >= ts - 135 && m <= te + 45) continue;
+    if (sess.some(x => m >= x.start - 135 && m <= x.end + 45)) continue;
     const at = m;
     list.push({ at, id: 'reg-' + at, title: 'Water break 💧', body: 'Time for a glass of water.',
       cond: () => { // skip if already ahead of pace
@@ -863,10 +889,10 @@ function sorenessAlert() {
   return [addDays(today(), -1), addDays(today(), -2), addDays(today(), -3)].every(sore) && !getDay(today())?.checkin;
 }
 function smartSuggestions(k = today()) {
-  const out = [], n = nowMin(), t = dayType(k), gs = dayGroups(k), P = S.profile;
-  const ts = hm2min(P.trainingTime), te = ts + (+P.trainingDuration || 90);
-  if (t !== 'rest' && n < ts && !hasMeal(k, 'pre')) out.push({ e: '⚡', t: `${t === 'match' ? 'Match' : 'Training'} at ${fmtTime(ts)} — no pre-training snack yet`, d: `Around ${fmtTime(ts - 120)}–${fmtTime(ts - 60)} have a banana, toast with peanut butter, a small bowl of poha or a few dates.` });
-  if (t !== 'rest' && n >= te && n <= te + 180 && !hasMeal(k, 'post')) out.push({ e: '💪', t: 'Recovery snack time', d: 'Within an hour of training: milk or lassi, eggs, a paneer sandwich, chana chaat, or curd with fruit.' });
+  const out = [], n = nowMin(), t = dayType(k), gs = dayGroups(k), sess = sessionsOn(k);
+  const next = sess.find(x => n < x.start), last = sess.filter(x => n >= x.end).pop();
+  if (next && !hasMealSince(k, 'pre', next.start - 180)) out.push({ e: '⚡', t: `${next.name} at ${fmtTime(next.start)} — no pre-training snack yet`, d: `Around ${fmtTime(next.start - 120)}–${fmtTime(next.start - 60)} have a banana, toast with peanut butter, a small bowl of poha or a few dates.` });
+  if (last && n <= last.end + 180 && !hasMealSince(k, 'post', last.end - 15)) out.push({ e: '💪', t: `Recovery snack after ${last.name.toLowerCase()}`, d: 'Within an hour of training: milk or lassi, eggs, a paneer sandwich, chana chaat, or curd with fruit.' });
   if (t === 'match') out.push({ e: '🏟️', t: 'It\'s match day!', d: 'Check the match day plan below for what to eat and when.' });
   if (n >= 720 && !gs.has('protein')) out.push({ e: '🍗', t: 'Your fuel check is missing protein', d: 'Protein helps muscles grow and repair. Try eggs, dal, paneer, chicken, fish, curd, chana or sprouts.' });
   if (n >= 720 && !gs.has('carbs')) out.push({ e: '🍚', t: 'Add some carbs for energy', d: 'Rice, roti, poha, idli, pasta or a banana fill up your energy tank.' });
@@ -946,7 +972,7 @@ function renderToday(v) {
   <div class="card">
     <div class="row between"><h2 style="margin:0">🏃 Training today</h2><button class="btn sm" data-act="goFit" data-val="training">+ Log</button></div>
     ${workoutDays().includes(parseKey(k).getDay()) && !S.workoutLog.some(l => l.date === k) ? `<div class="sugg"><span class="em">🏋️</span><div class="grow"><b>Workout day</b><div class="small muted">${esc(currentWorkout(k).title)} · ${currentWorkout(k).minutes} min</div></div><button class="btn sm primary" data-act="goFit" data-val="workout">Start</button></div>` : ''}
-    ${sessToday.length ? sessToday.map(sessionRow).join('') : `<p class="muted small">${t === 'rest' ? 'Rest day — recovery is training too.' : `Nothing logged yet. ${t === 'match' ? 'Match' : 'Training'} at ${fmtTime(hm2min(S.profile.trainingTime))}.`}</p>`}
+    ${sessToday.length ? sessToday.map(sessionRow).join('') : `<p class="muted small">${t === 'rest' ? 'Rest day — recovery is training too.' : `Nothing logged yet. Today: ${sessionsOn(k).map(x => `${esc(x.name)} at ${fmtTime(x.start)}`).join(', ')}.`}</p>`}
   </div>
 
   <div class="card">
@@ -1109,7 +1135,7 @@ function sessionRow(s) {
 }
 function weekStart(k) { const d = parseKey(k); const off = (d.getDay() + 6) % 7; return addDays(k, -off); }
 function fitTraining(b) {
-  const f = UI.sessForm || (UI.sessForm = { type: 'team', duration: +S.profile.trainingDuration || 90, intensity: 'medium' });
+  const f = UI.sessForm || (UI.sessForm = { type: 'team', duration: sessionsOn(today())[0]?.duration || schedules()[0]?.duration || 90, intensity: 'medium' });
   const ws = weekStart(today());
   const weekMin = S.sessions.filter(s => s.date >= ws).reduce((a, s) => a + (+s.duration || 0), 0);
   const recent = S.sessions.slice().sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, 10);
@@ -1199,8 +1225,8 @@ function fitWorkout(b) {
   const logs = S.workoutLog.slice().sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   const monthLogs = S.workoutLog.filter(l => l.date.slice(0, 7) === k.slice(0, 7));
   const rows = [1, 2, 3, 4, 5, 6, 0].map(d => {
-    const train = S.profile.trainingDays.includes(d), wd = days.includes(d);
-    const [w, x] = train && wd ? ['Team training + workout', 'Keep the workout light — training comes first.'] : train ? ['Team training', 'Warm up well, then 10 min of stretching afterwards.']
+    const pl = plannedOn(d), train = pl.length > 0, wd = days.includes(d), names = pl.map(x => `${esc(x.name)} ${fmtTime(x.start)}`).join(' · ');
+    const [w, x] = train && wd ? [names + ' + workout', 'Keep the workout light — training comes first.'] : train ? [names, 'Warm up well, then 10 min of stretching afterwards.']
       : wd ? [cw.own ? 'My workout' : wkTitle(), `${cw.minutes} min`] : ['Rest day', 'Play for fun, walk, stretch. Muscles grow when they rest.'];
     return `<div class="dayrow ${train || wd ? 'train' : ''}"><div class="dn">${WEEKDAYS[d]}${d === dow ? ' •' : ''}</div><div><b>${w}</b><div class="small muted">${x}</div></div></div>`;
   }).join('');
@@ -1351,11 +1377,19 @@ function profMe(b) {
     <div class="grid2"><label class="f">Age<input type="number" inputmode="numeric" data-change="prof" data-f="age" value="${esc(P.age)}" min="6" max="19"></label>
     <label class="f">Team<input data-change="prof" data-f="team" value="${esc(P.team)}" placeholder="Team name"></label></div>
     <label class="f">Position<select data-change="prof" data-f="position"><option value="">Choose…</option>${POSITIONS.map(p => `<option ${p === P.position ? 'selected' : ''}>${p}</option>`).join('')}</select></label>
-    <p class="small muted" style="margin:4px 0 6px;font-weight:600">Training days</p>
-    <div class="weekdays">${[1, 2, 3, 4, 5, 6, 0].map(d => `<button class="chip ${P.trainingDays.includes(d) ? 'on' : ''}" data-act="trainDay" data-val="${d}">${WEEKDAYS[d].slice(0, 2)}</button>`).join('')}</div>
-    <div class="grid2" style="margin-top:12px"><label class="f">Usual training time<input type="time" data-change="prof" data-f="trainingTime" value="${esc(P.trainingTime)}"></label>
-    <label class="f">Session length (min)<input type="number" inputmode="numeric" data-change="prof" data-f="trainingDuration" value="${esc(P.trainingDuration)}" min="15" max="240"></label></div>
-    <p class="small muted">Your training days and time power the smart water reminders.</p>
+  </div>
+  <div class="card"><h2>🗓️ Training times</h2>
+    <p class="small muted">Add each place you train — club, school, academy — with its own days and time. Different time on one day? Add it as another entry.</p>
+    ${schedules().map(x => `<div class="sched">
+      <div class="row"><input data-change="sched" data-id="${x.id}" data-f="name" value="${esc(x.name)}" placeholder="e.g. Club, School, Academy" aria-label="Name" class="grow">
+        <button class="icon-btn" data-act="delSched" data-id="${x.id}" aria-label="Delete">🗑️</button></div>
+      <div class="weekdays" style="margin-top:10px">${[1, 2, 3, 4, 5, 6, 0].map(d => `<button class="chip ${x.days.includes(d) ? 'on' : ''}" data-act="schedDay" data-id="${x.id}" data-val="${d}">${WEEKDAYS[d].slice(0, 2)}</button>`).join('')}</div>
+      <div class="grid2" style="margin-top:10px"><label class="f" style="margin:0">Starts<input type="time" data-change="sched" data-id="${x.id}" data-f="time" value="${esc(x.time)}"></label>
+        <label class="f" style="margin:0">Length (min)<input type="number" inputmode="numeric" min="15" max="300" data-change="sched" data-id="${x.id}" data-f="duration" value="${esc(x.duration)}"></label></div>
+    </div>`).join('') || '<p class="muted small">No training added yet.</p>'}
+    <button class="btn block" data-act="addSched">+ Add training</button>
+    ${clashText()}
+    <p class="small muted">These power the water and snack reminders, the workout plan and the Today screen.</p>
   </div>
   ${workoutProfileCard()}
   <div class="card"><h2>📏 Growth log</h2>
@@ -1375,6 +1409,14 @@ function profMe(b) {
   if (hs.length >= 2) mkChart('chGrowth', { type: 'line', data: { labels: hs.map(x => fmtDate(x.date, { month: 'short', year: '2-digit' })),
     datasets: [{ data: hs.map(x => +x.height), borderColor: '#1b7a3a', backgroundColor: 'rgba(27,122,58,.15)', fill: true, tension: .3, pointRadius: 5 }] },
     options: { scales: { y: { title: { display: true, text: 'height (cm)' } } } } });
+}
+function clashText() {
+  const out = [];
+  for (const d of [1, 2, 3, 4, 5, 6, 0]) {
+    const pl = plannedOn(d);
+    for (let i = 1; i < pl.length; i++) if (pl[i].start < pl[i - 1].end) out.push(`${WEEKDAYS[d]}: ${esc(pl[i - 1].name)} and ${esc(pl[i].name)} overlap`);
+  }
+  return out.length ? `<div class="alert warn small" style="margin-top:10px">⚠️ ${out.join('<br>')}</div>` : '';
 }
 function workoutProfileCard() {
   const W = S.workout, a = wkAnswers();
@@ -1706,7 +1748,12 @@ const ACT = {
   },
   delTest(el) { confirmBox('Delete this result?', 'This can\'t be undone.', 'Delete', () => { S.tests = S.tests.filter(t => t.id !== el.dataset.id); save(); render(); }); },
   // profile
-  trainDay(el) { const d = +el.dataset.val, td = S.profile.trainingDays; S.profile.trainingDays = td.includes(d) ? td.filter(x => x !== d) : [...td, d].sort(); save(); render(); },
+  schedDay(el) { const x = schedules().find(y => y.id === el.dataset.id), d = +el.dataset.val; if (!x) return; x.days = x.days.includes(d) ? x.days.filter(y => y !== d) : [...x.days, d]; save(); render(); },
+  addSched() { S.profile.schedules.push({ id: uid(), name: '', days: [], time: '16:00', duration: 60 }); save(); render(); setTimeout(() => { const i = $$('[data-change=sched][data-f=name]').pop(); i?.scrollIntoView({ block: 'center' }); i?.focus(); }, 50); },
+  delSched(el) {
+    const x = schedules().find(y => y.id === el.dataset.id); if (!x) return;
+    confirmBox(`Remove ${x.name || 'this training'}?`, 'Its days and time come off your plan. Sessions you already logged stay.', 'Remove', () => { S.profile.schedules = schedules().filter(y => y !== x); save(); render(); });
+  },
   saveGrowth() {
     const h = parseFloat($('#gH').value), w = parseFloat($('#gW').value), date = $('#gDate').value || today();
     if (!(h > 80 && h < 230) && !(w > 15 && w < 150)) { toast('Enter your height in cm (and weight in kg if you like)'); return; }
@@ -1746,7 +1793,7 @@ const ACT = {
     confirmBox('Reset everything?', 'This deletes ALL your data and photos from this device: profile, growth log, food, training, tests and badges.', 'Continue', () => {
       confirmBox('Are you really sure?', 'There is no undo. Export a backup first if you might want it back.', 'Yes, delete everything', async () => {
         try { await idb.clear(); } catch (e) { }
-        S = structuredClone(DEFAULT); save(); banners.length = 0; renderBanners(); UI.tab = 'today'; UI.pending = null; saveUI(); toast('Everything has been reset'); render();
+        S = fixState(structuredClone(DEFAULT)); save(); banners.length = 0; renderBanners(); UI.tab = 'today'; UI.pending = null; saveUI(); toast('Everything has been reset'); render();
       });
     });
   },
@@ -1769,6 +1816,12 @@ const CHANGE = {
   wkMinOther(el, ev) { if (ev.type !== 'change') return; S.workout.answers = { ...wkAnswers(), minutes: clamp(parseInt(el.value, 10) || 20, 5, 120), minutesOther: true }; save(); render(); },
   wkPlaceOther(el, ev) { if (ev.type !== 'change') return; S.workout.answers = { ...wkAnswers(), placeOther: el.value.trim() }; save(); },
   wkOwnMin(el, ev) { if (ev.type !== 'change') return; S.workout.ownMinutes = clamp(+el.value || 30, 5, 180); save(); },
+  sched(el, ev) {
+    if (ev.type !== 'change') return;
+    const x = schedules().find(y => y.id === el.dataset.id), f = el.dataset.f; if (!x) return;
+    x[f] = f === 'duration' ? clamp(parseInt(el.value, 10) || 60, 15, 300) : f === 'name' ? el.value.trim() : el.value;
+    save(); render();
+  },
   rate(el) { $('#rateOut').textContent = el.value + '/10'; },
   testSel(el, ev) { if (ev.type !== 'change') return; UI.testSel = el.value; saveUI(); render(); },
   prof(el, ev) {
@@ -1821,7 +1874,7 @@ $('#importInput').addEventListener('change', async e => {
     const data = JSON.parse(await file.text());
     if (data.app !== 'footy-tracker' || !data.state) throw new Error('not a backup');
     confirmBox('Import this backup?', `From ${new Date(data.exportedAt).toLocaleString('en-GB')}. It replaces everything currently on this device.`, 'Import', async () => {
-      S = merge(structuredClone(DEFAULT), data.state); save();
+      S = fixState(merge(structuredClone(DEFAULT), data.state)); save();
       try { await idb.clear(); for (const p of data.photos || []) { const blob = await (await fetch(p.dataUrl)).blob(); await idb.put({ id: p.id, date: p.date, blob }); } } catch (err) { }
       photoURLs.clear(); UI.pending = null; toast('✅ Backup imported'); render();
     });
@@ -1959,8 +2012,8 @@ async function doSyncDown() {
     if (!row) { S.savedAt = S.savedAt || new Date().toISOString(); dirty = true; saveVer++; return pushCloud(); } // brand-new account: upload what this phone has
     const remoteAt = row.state?.savedAt || '';
     if (remoteAt > getBase()) {
-      if (dirty) { S = mergeStates(S, row.state); S.savedAt = new Date().toISOString(); saveVer++; }
-      else S = merge(structuredClone(DEFAULT), row.state);
+      if (dirty) { S = fixState(mergeStates(S, fixState(merge(structuredClone(DEFAULT), row.state)))); S.savedAt = new Date().toISOString(); saveVer++; }
+      else S = fixState(merge(structuredClone(DEFAULT), row.state));
       try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { }
       setBase(remoteAt);
       if (!document.activeElement?.matches('input,select,textarea') && !$('#modal')) render();
