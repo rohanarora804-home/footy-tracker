@@ -180,12 +180,21 @@ details[open] summary::after{content:"－"}
 @keyframes up{from{transform:translateY(40px);opacity:.5}}
 .clock{font-size:56px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;margin:10px 0}
 .toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#14231a;color:#fff;padding:12px 18px;border-radius:14px;z-index:60;font-weight:600;max-width:90vw;text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.25);animation:slide .3s}
+body.auth nav.bottom,body.auth #banners{display:none}
+body.auth{padding-bottom:24px}
 #confetti{position:fixed;inset:0;pointer-events:none;z-index:70}
 .hidden{display:none!important}
 .tag{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--pitch-l);color:var(--pitch-d)}
 @media (prefers-color-scheme:dark){.tag{color:#8fe0a6}}
 .tip{font-size:15px}
 .chk{width:38px;height:38px;min-height:38px;padding:0;border-radius:12px;border:2px solid var(--line);background:var(--bg);color:#fff;font-size:20px;flex:none}
+input[type=checkbox]{width:24px;height:24px;min-height:0;padding:0;margin:0;accent-color:var(--pitch);flex:none}
+.why{border:none;padding:0 0 4px}
+.glass-ico{width:34px;height:34px;border-radius:8px;object-fit:cover;border:2px solid rgba(255,255,255,.7)}
+.drinks{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:6px}
+.drink{display:flex;align-items:center;gap:8px;background:var(--bg);border-radius:12px;padding:6px}
+.drink img,.drink .noimg{width:44px;height:44px;border-radius:10px;object-fit:cover;flex:none;display:flex;align-items:center;justify-content:center;background:var(--water-l)}
+.drink .small{flex:1;line-height:1.25}
 .chk.on{background:var(--pitch);border-color:var(--pitch)}
 .item.done .t{text-decoration:line-through;opacity:.6}
 .item details{border:none;padding:0}.item summary{padding:2px 0;font-weight:600;color:var(--muted)}
@@ -198,6 +207,7 @@ hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 <main id="view"></main>
 <nav class="bottom"><div class="in" id="nav"></div></nav>
 <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden">
+<input type="file" id="waterPhotoInput" accept="image/*" capture="environment" class="hidden">
 <input type="file" id="importInput" accept="application/json,.json" class="hidden">
 <canvas id="confetti"></canvas>
 
@@ -210,8 +220,8 @@ hr{border:none;border-top:1px solid var(--line);margin:14px 0}
 
 const TFJS_URL = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js';
 const MOBILENET_URL = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js';
-const KEY = 'footyTracker.v1';
-const GLASS = 250;
+let KEY = 'footyTracker.v1', DB_NAME = 'footyTracker', ACCOUNT = null; // set per account at login
+const GLASS = 250; // a standard glass, used for goal maths
 
 /* ---------- small helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -234,7 +244,8 @@ function fmtTime(min) {
 }
 const fmtDate = (k, opts = { weekday: 'short', day: 'numeric', month: 'short' }) => parseKey(k).toLocaleDateString('en-GB', opts);
 const fmtL = ml => (ml / 1000).toFixed(ml % 1000 === 0 ? 0 : (ml % 100 === 0 ? 1 : 2)) + ' L';
-const glasses = ml => { const g = ml / GLASS; return Number.isInteger(g) ? g : g.toFixed(1); };
+const glassMl = () => clamp(+S.settings.glassMl || GLASS, 50, 2000);
+const glasses = ml => { const g = ml / glassMl(); return Number.isInteger(g) ? g : g.toFixed(1); };
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /* ---------- state ---------- */
@@ -247,8 +258,9 @@ const DEFAULT = {
   matches: [],       // {id,date,minutes,position,goals,assists,rating,notes}
   tests: [],         // {id,date,test,value}
   badges: {},        // id -> date earned
-  settings: { reminders: true, quietStart: '22:00', quietEnd: '07:00', interval: 120, foodMap: {} },
+  settings: { reminders: true, quietStart: '22:00', quietEnd: '07:00', interval: 120, foodMap: {}, glassMl: 250, glassPhotoId: null },
   workout: { mode: null, own: [], ownDays: [], ownMinutes: 30, answers: {} }, // mode: 'own' | 'suggest'
+  workoutLog: [],    // {id,date,title,minutes,effort,notes,items:[{name,amount,done}]}
 };
 function merge(a, b) {
   for (const k in b) {
@@ -262,7 +274,7 @@ function load() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s) return merge(structuredClone(DEFAULT), s); } catch (e) { }
   return structuredClone(DEFAULT);
 }
-let S = load();
+let S = structuredClone(DEFAULT); // loaded for the signed-in account in startApp()
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save — is storage full?'); }
 }
@@ -270,7 +282,6 @@ const getDay = k => S.days[k] || null;
 function day(k = today()) { return S.days[k] || (S.days[k] = { water: 0, meals: [], fired: [] }); }
 
 let UI = { tab: 'today', food: 'log', fit: 'workout', prof: 'me', hist: 7, testSel: 'sprint20', pending: null };
-try { Object.assign(UI, JSON.parse(localStorage.getItem(KEY + '.ui')) || {}); UI.pending = null; } catch (e) { }
 const saveUI = () => { try { localStorage.setItem(KEY + '.ui', JSON.stringify({ ...UI, pending: null })); } catch (e) { } };
 
 /* ---------- day type & water goal ---------- */
@@ -503,19 +514,57 @@ const EX = [
 const exByName = n => [EX_WARM, EX_COOL, ...EX].find(e => e.n.toLowerCase() === String(n).trim().toLowerCase());
 function wkAnswers() { return { ...WK_DEFAULT, ...(S.workout.answers || {}) }; }
 const wkAnswered = () => Object.keys(S.workout.answers || {}).length > 0;
-function exAllowed(e, a) {
+function exAllowed(e, a, spurt = false) {
   if ((e.eq || []).some(q => !a.equipment.includes(q))) return false;
-  if (e.space && a.place === 'home') return false;
+  if (e.space && (a.place === 'home' || (a.place === 'other' && a.space !== 'yes'))) return false;
   const sore = a.niggles.filter(n => n !== 'other');
-  if (e.impact && sore.some(n => n === 'knees' || n === 'ankles')) return false;
+  if (e.impact && (spurt || sore.some(n => n === 'knees' || n === 'ankles'))) return false;
   return !(e.avoid || []).some(n => sore.includes(n));
 }
-// A workout built from the answers. `variant` rotates the exercises so a second workout day isn't a repeat.
+const goalName = g => WK_GOALS.find(x => x[0] === g)[1].replace(/^\S+\s/, '');
+// Fitness tests that didn't improve last time become things to work on.
+const TEST_GOAL = { sprint20: 'speed', beep: 'stamina', juggle: 'skills', pushups: 'strength', plank: 'core', longjump: 'speed', dribble: 'agility' };
+function testTargets() {
+  return TESTS.flatMap(t => {
+    const es = testEntries(t.id); if (es.length < 2) return [];
+    return better(t, es[es.length - 1].value, es[es.length - 2].value) ? [] : [{ goal: TEST_GOAL[t.id], test: t }];
+  });
+}
+// Growth speed from the height log. About 0.7 cm a month or more is a growth spurt.
+function growthInfo() {
+  const hs = S.growth.filter(g => g.height).sort((a, b) => a.date.localeCompare(b.date));
+  if (hs.length < 2) return null;
+  const last = hs[hs.length - 1], ref = hs.slice().reverse().find(g => daysBetween(g.date, last.date) >= 60) || hs[0];
+  const days = daysBetween(ref.date, last.date); if (days < 28) return null;
+  const perMonth = Math.round((last.height - ref.height) / (days / 30.44) * 10) / 10;
+  return { perMonth, spurt: perMonth >= 0.7 };
+}
+function wkContext() {
+  const a = wkAnswers(), tests = testTargets(), growth = growthInfo(), spurt = !!growth?.spurt;
+  const goals = [...new Set([...tests.map(x => x.goal), ...(a.goals.length ? a.goals : WK_DEFAULT.goals)])];
+  if (spurt && !goals.includes('flexibility')) goals.push('flexibility');
+  return { a, goals, tests, growth, spurt };
+}
+function wkReasons(ctx = wkContext()) {
+  const r = [];
+  if (wkAnswered() && ctx.a.goals.length) r.push(['🎯', `You want to get better at ${ctx.a.goals.map(g => goalName(g).toLowerCase()).join(', ')}.`]);
+  ctx.tests.forEach(t => r.push(['🧪', `Your ${t.test.n.toLowerCase()} didn't improve at the last test, so there's extra ${goalName(t.goal).toLowerCase()} work.`]));
+  if (ctx.spurt) r.push(['🌱', `You're growing fast — about ${ctx.growth.perMonth} cm a month. Muscles and bones are catching up, so there are no jumps and more stretching and balance. Achy knees or heels are common in a growth spurt: tell a parent or coach if they hurt.`]);
+  if (!S.tests.length) r.push(['💡', 'Do the fitness tests and this plan will also target what your results say needs work.']);
+  if (S.growth.filter(g => g.height).length < 2) r.push(['💡', 'Log your height every month — if you hit a growth spurt, the plan changes to protect your knees and heels.']);
+  return r;
+}
+// Weight sets how much to drink around a workout (about 6 ml per kg beforehand).
+function workoutDrink() {
+  const w = latestWeight();
+  if (!w) return 'Drink 1–2 glasses in the hour before, sip during, and 2 glasses after.';
+  return `Drink about ${clamp(Math.round(w * 6 / 50) * 50, 200, 500)} ml in the hour before, sip during, and 2 glasses after.`;
+}
+// A workout built from the answers, tests and growth. `variant` rotates the exercises so a second workout day isn't a repeat.
 function suggestWorkout(variant = 0) {
-  const a = wkAnswers(), lv = LV[a.level] ?? 1, total = +a.minutes || 20;
+  const ctx = wkContext(), a = ctx.a, lv = LV[a.level] ?? 1, total = +a.minutes || 20, goals = ctx.goals;
   let budget = total - 8;
-  const goals = a.goals.length ? a.goals : WK_DEFAULT.goals;
-  const pool = EX.filter(e => exAllowed(e, a)), used = new Set(), items = [];
+  const pool = EX.filter(e => exAllowed(e, a, ctx.spurt)), used = new Set(), items = [];
   for (let round = 0; budget > 1 && round < 8; round++) {
     let added = false;
     for (let i = 0; i < goals.length && budget > 1; i++) {
@@ -527,11 +576,12 @@ function suggestWorkout(variant = 0) {
     }
     if (!added) break;
   }
+  if (ctx.spurt && !used.has('balance')) items.push(EX.find(e => e.id === 'balance')); // protects ankles and knees while growing
   const pick = v => Array.isArray(v) ? v[lv] : v;
   return [EX_WARM, ...items, EX_COOL].map(e => ({ id: e.id, name: e.n, amount: pick(e.amt), secs: e.secs ? pick(e.secs) : null, how: e.how }));
 }
-function wkTitle(a = wkAnswers()) {
-  const names = (a.goals.length ? a.goals : WK_DEFAULT.goals).map(g => WK_GOALS.find(x => x[0] === g)[1].replace(/^\S+\s/, ''));
+function wkTitle() {
+  const names = wkContext().goals.map(goalName);
   return names.slice(0, 2).join(' + ') + (names.length > 2 ? ' & more' : '') + ' workout';
 }
 // Which weekdays are workout days: your own choice, or spread over the days without team training (Sunday stays a rest day).
@@ -582,7 +632,7 @@ const idb = {
   _db: null,
   open() {
     return this._db || (this._db = new Promise((res, rej) => {
-      const r = indexedDB.open('footyTracker', 1);
+      const r = indexedDB.open(DB_NAME, 1);
       r.onupgradeneeded = () => r.result.createObjectStore('photos', { keyPath: 'id' });
       r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
     }));
@@ -774,7 +824,7 @@ function checkBadges(extra = {}) {
   if (S.matches.some(m => m.goals > 0)) got('goal1');
   if (S.matches.some(m => m.goals >= 3)) got('hattrick');
   if (S.sessions.length >= 10) got('train10');
-  const wk = S.sessions.filter(s => s.workout).length; if (wk >= 1) got('workout1'); if (wk >= 10) got('workout10');
+  const wk = S.workoutLog.length; if (wk >= 1) got('workout1'); if (wk >= 10) got('workout10');
   if (new Set(S.growth.map(g => g.date.slice(0, 7))).size >= 3) got('grow3');
 }
 
@@ -828,6 +878,7 @@ function renderToday(v) {
   const pct = clamp(Math.round(d.water / goal * 100), 0, 100);
   const extra = t === 'match' ? 'Match day: +3 glasses' : t === 'training' ? 'Training day: +2 glasses' : 'Rest day';
   const nr = nextReminder(); shownReminder = nr?.id || null;
+  const tmr = nr ? null : reminderPlan(addDays(k, 1))[0];
   const gs = dayGroups(k);
   const sl = d.sleep || {}, ci = d.checkin || {};
   const sugg = smartSuggestions(k).slice(0, 2);
@@ -852,12 +903,17 @@ function renderToday(v) {
           ${[25, 50, 75].map(p => `<div class="tick" style="bottom:${p}%"></div>`).join('')}
           <div class="pct">${pct >= 100 ? '🎉' : pct + '%'}</div></div></div>
       <div class="water-controls">
-        <div><span class="big-num">${glasses(d.water)}</span> <span class="muted">of ${glasses(goal)} glasses</span><div class="muted small">${fmtL(d.water)} of ${fmtL(goal)}</div></div>
-        <button class="btn water big" data-act="water" data-ml="250">+1 glass</button>
-        <div class="grid3"><button class="btn sm ghost" data-act="water" data-ml="-250">−1</button><button class="btn sm" data-act="water" data-ml="500">500 ml</button><button class="btn sm" data-act="water" data-ml="1000">1 L</button></div>
+        <div><span class="big-num">${glasses(d.water)}</span> <span class="muted">of ${Math.ceil(goal / glassMl())} glasses</span><div class="muted small">${fmtL(d.water)} of ${fmtL(goal)}</div></div>
+        <button class="btn water big" data-act="water" data-ml="${glassMl()}">${S.settings.glassPhotoId ? `<img class="glass-ico" data-photo="${S.settings.glassPhotoId}" alt="">` : ''}+1 glass</button>
+        <div class="grid3"><button class="btn sm ghost" data-act="waterUndo">↩︎ Undo</button><button class="btn sm" data-act="water" data-ml="500">500 ml</button><button class="btn sm" data-act="water" data-ml="1000">1 L</button></div>
+        <div class="grid2"><button class="btn sm" data-act="waterCustom">✏️ Other amount</button><button class="btn sm" data-act="waterPhoto">📷 Photo drink</button></div>
       </div>
     </div>
-    <p class="small muted" style="margin-top:12px">⏰ ${S.settings.reminders ? (nr ? `Next reminder: <b>${fmtTime(nr.at)}</b> — ${esc(nr.body)}` : 'No more reminders today.') : 'Reminders are off — turn them on in Profile › Settings.'}</p>
+    <div class="row between small" style="margin-top:12px"><span class="muted">🥛 My glass: <b>${glassMl()} ml</b></span><button class="btn sm ghost" data-act="myGlass">${S.settings.glassPhotoId ? 'Change' : '📷 Set up my glass'}</button></div>
+    ${(d.drinks || []).length ? `<details><summary class="small">Today's drinks (${d.drinks.length})</summary><div class="drinks">${d.drinks.slice().reverse().map(x => `<div class="drink">
+      ${x.photoId ? `<img data-photo="${x.photoId}" alt="">` : '<div class="noimg">💧</div>'}<div class="small"><b>${x.ml >= 1000 ? fmtL(x.ml) : x.ml + ' ml'}</b><br><span class="muted">${fmtTime(hm2min(x.time))}</span></div>
+      <button class="icon-btn" data-act="delDrink" data-id="${x.id}" aria-label="Delete">✕</button></div>`).join('')}</div></details>` : ''}
+    <p class="small muted" style="margin-top:8px">⏰ ${S.settings.reminders ? (nr ? `Next reminder: <b>${fmtTime(nr.at)}</b> — ${esc(nr.body)}` : (tmr ? `Today's reminders are done. Next: <b>tomorrow at ${fmtTime(tmr.at)}</b>.` : 'No reminders planned.')) : 'Reminders are off — turn them on in Profile › Settings.'}</p>
   </div>
 
   <div class="card">
@@ -884,7 +940,7 @@ function renderToday(v) {
 
   <div class="card">
     <div class="row between"><h2 style="margin:0">🏃 Training today</h2><button class="btn sm" data-act="goFit" data-val="training">+ Log</button></div>
-    ${workoutDays().includes(parseKey(k).getDay()) && !d.wk?.done ? `<div class="sugg"><span class="em">🏋️</span><div class="grow"><b>Workout day</b><div class="small muted">${esc(currentWorkout(k).title)} · ${currentWorkout(k).minutes} min</div></div><button class="btn sm primary" data-act="goFit" data-val="workout">Start</button></div>` : ''}
+    ${workoutDays().includes(parseKey(k).getDay()) && !S.workoutLog.some(l => l.date === k) ? `<div class="sugg"><span class="em">🏋️</span><div class="grow"><b>Workout day</b><div class="small muted">${esc(currentWorkout(k).title)} · ${currentWorkout(k).minutes} min</div></div><button class="btn sm primary" data-act="goFit" data-val="workout">Start</button></div>` : ''}
     ${sessToday.length ? sessToday.map(sessionRow).join('') : `<p class="muted small">${t === 'rest' ? 'Rest day — recovery is training too.' : `Nothing logged yet. ${t === 'match' ? 'Match' : 'Training'} at ${fmtTime(hm2min(S.profile.trainingTime))}.`}</p>`}
   </div>
 
@@ -1129,10 +1185,14 @@ function fitTests(b) {
 }
 function fitWorkout(b) {
   const W = S.workout, k = today(), dow = parseKey(k).getDay(), days = workoutDays(), cw = currentWorkout(k);
-  const wk = getDay(k)?.wk || { checked: [] }, isWD = days.includes(dow), t = dayType(k);
-  const ws = weekStart(k), doneWeek = S.sessions.filter(s => s.workout && s.date >= ws).length;
+  const wk = getDay(k)?.wk || { checked: [] }, planned = days.includes(dow), t = dayType(k);
+  const ws = weekStart(k), weekLogs = S.workoutLog.filter(l => l.date >= ws && l.date <= k).length;
+  const loggedToday = S.workoutLog.filter(l => l.date === k);
   const ticked = cw.items.filter(x => wk.checked.includes(x.id)).length;
-  const a = wkAnswers(), skipped = a.goals.filter(g => !EX.some(e => e.f.includes(g) && exAllowed(e, a)));
+  const ctx = wkContext(), skipped = ctx.goals.filter(g => !EX.some(e => e.f.includes(g) && exAllowed(e, ctx.a, ctx.spurt)));
+  const reasons = cw.own ? [] : wkReasons(ctx);
+  const logs = S.workoutLog.slice().sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const monthLogs = S.workoutLog.filter(l => l.date.slice(0, 7) === k.slice(0, 7));
   const rows = [1, 2, 3, 4, 5, 6, 0].map(d => {
     const train = S.profile.trainingDays.includes(d), wd = days.includes(d);
     const [w, x] = train && wd ? ['Team training + workout', 'Keep the workout light — training comes first.'] : train ? ['Team training', 'Warm up well, then 10 min of stretching afterwards.']
@@ -1143,25 +1203,33 @@ function fitWorkout(b) {
   ${!W.mode ? `<div class="alert info">🏋️ Got your own workout? Add it in <a href="#" data-act="goProf">Profile</a> — or answer a few quick questions there and get one made for you. Here's a starter workout until then.</div>` : ''}
   ${W.mode === 'own' && !W.own.length ? `<div class="alert info">You haven't added your exercises yet — add them in <a href="#" data-act="goProf">Profile</a>. Here's a suggested workout meanwhile.</div>` : ''}
   <div class="card pitch"><div class="row between"><div>
-    <div style="font-size:20px;font-weight:800">${isWD ? 'Workout day! 💪' : t !== 'rest' ? 'Training day ⚽' : 'Not a workout day'}</div>
-    <div class="muted small">${isWD ? 'Your workout is ready below.' : t !== 'rest' ? 'Team training is enough today — the workout is optional.' : 'Rest up, or do the workout anyway if you feel fresh.'}</div></div>
-    <div class="center"><div style="font-size:26px;font-weight:800">${doneWeek}/${days.length}</div><div class="small muted">this week</div></div></div></div>
+    <div style="font-size:20px;font-weight:800">${loggedToday.length ? 'Workout logged today ✅' : planned ? 'Workout planned today 💪' : t !== 'rest' ? 'Training day ⚽' : 'No workout planned today'}</div>
+    <div class="muted small">${loggedToday.length ? 'Nice work. Drink up and have a recovery snack.' : planned ? 'When you\'ve done it, tap "Log this workout".' : t !== 'rest' ? 'Team training is enough today — the workout is optional.' : 'Rest up, or do the workout anyway if you feel fresh.'}</div></div>
+    <div class="center"><div style="font-size:26px;font-weight:800">${weekLogs}/${days.length}</div><div class="small muted">logged this week</div></div></div></div>
   <div class="card">
     <div class="row between"><h2 style="margin:0">${esc(cw.title)}</h2><span class="tag">${cw.minutes} min</span></div>
-    <p class="small muted">${cw.own ? 'Your own workout.' : wkAnswered() ? 'Made from your answers. Bodyweight only.' : 'A starter workout. Answer the questions in Profile to make it yours.'}${skipped.length ? ` No ${skipped.join('/')} exercises fit your answers yet — add equipment or change the place in Profile.` : ''}</p>
+    <p class="small muted">${cw.own ? 'Your own workout.' : wkAnswered() ? 'Made for you. Bodyweight only.' : 'A starter workout. Answer the questions in Profile to make it yours.'}${skipped.length ? ` No ${skipped.map(g => goalName(g).toLowerCase()).join('/')} exercises fit your answers yet — add equipment or change the place in Profile.` : ''}</p>
+    ${reasons.length ? `<details class="why"><summary>Why this workout?</summary>${reasons.map(([e, r]) => `<div class="sugg"><span class="em">${e}</span><div class="small">${esc(r)}</div></div>`).join('')}</details>` : ''}
     ${cw.items.map(x => { const on = wk.checked.includes(x.id); return `<div class="item ${on ? 'done' : ''}">
-      <button class="chk ${on ? 'on' : ''}" data-act="wkCheck" data-id="${esc(x.id)}" aria-label="Done">${on ? '✓' : ''}</button>
+      <button class="chk ${on ? 'on' : ''}" data-act="wkCheck" data-id="${esc(x.id)}" aria-label="Tick off ${esc(x.name)}">${on ? '✓' : ''}</button>
       <div class="grow"><div class="t">${esc(x.name)}</div><div class="small muted">${esc(x.amount || '')}</div>
         ${x.how ? `<details><summary class="small">How to do it</summary><p class="small">${esc(x.how)}</p></details>` : ''}</div>
       ${x.secs ? `<button class="btn sm" data-act="countdown" data-val="${x.secs}">⏳</button>` : ''}</div>`; }).join('')}
-    <p class="small muted center">${ticked} of ${cw.items.length} done</p>
-    ${wk.done ? `<div class="alert good center">✅ Workout done today — ${wk.minutes} min logged. Great work!</div>`
-      : `<button class="btn primary block big" data-act="wkFinish">Finish workout</button>`}
+    <p class="small muted center">${ticked} of ${cw.items.length} ticked off · 💧 ${esc(workoutDrink())}</p>
+    <button class="btn primary block big" data-act="wkLog">📝 Log this workout</button>
     <div class="grid2" style="margin-top:10px">
-      ${!cw.own ? '<button class="btn sm" data-act="wkAdopt">📌 Make this my workout</button>' : ''}
-      ${W.mode === 'own' && W.own.length ? `<button class="btn sm" data-act="wkSugg">${UI.wkSugg ? '↩️ Back to my workout' : '💡 Try a suggested one'}</button>` : ''}
-      <button class="btn sm ghost" data-act="goProf">✏️ Change</button>
+      ${!cw.own ? '<button class="btn sm" data-act="wkAdopt">📌 Make this my workout</button>' : '<button class="btn sm" data-act="goProf">✏️ Edit my workout</button>'}
+      ${W.mode === 'own' && W.own.length ? `<button class="btn sm" data-act="wkSugg">${UI.wkSugg ? '↩️ Back to my workout' : '💡 Try a suggested one'}</button>` : '<button class="btn sm ghost" data-act="goProf">⚙️ Change answers</button>'}
     </div>
+  </div>
+  <div class="card"><div class="row between"><h2 style="margin:0">📒 Workout log</h2><button class="btn sm" data-act="wkLog" data-blank="1">+ Add</button></div>
+    <p class="small muted">${monthLogs.length} workout${monthLogs.length === 1 ? '' : 's'} this month · ${monthLogs.reduce((a, l) => a + (+l.minutes || 0), 0)} min</p>
+    ${logs.length ? logs.slice(0, UI.wlN || 8).map(l => { const done = (l.items || []).filter(x => x.done).length; return `<div class="item"><span class="em">🏋️</span>
+      <div class="grow"><div class="t">${esc(l.title)}</div><div class="small muted">${fmtDate(l.date)} · ${l.minutes} min · ${INTENS[l.effort] || ''}${l.items?.length ? ` · ${done}/${l.items.length} exercises` : ''}</div>
+        ${l.notes ? `<div class="small">${esc(l.notes)}</div>` : ''}</div>
+      <button class="icon-btn" data-act="wkLog" data-id="${l.id}" aria-label="Edit">✏️</button><button class="icon-btn" data-act="wkDelLog" data-id="${l.id}" aria-label="Delete">🗑️</button></div>`; }).join('')
+      + (logs.length > (UI.wlN || 8) ? '<button class="btn block" data-act="moreLogs">Show more</button>' : '')
+      : '<p class="muted small">Nothing logged yet. Do a workout, then tap "Log this workout" — you can pick a different date if you did it earlier.</p>'}
   </div>
   <div class="card"><h2>📋 Your week</h2><p class="small muted">Built around your training days. Bodyweight only — no heavy weights.</p>${rows}</div>
   <div class="card"><h2>The drills</h2>${DRILLS.map(d => `<details><summary>${d.e} ${d.n}</summary><p class="small">${d.d}</p></details>`).join('')}</div>
@@ -1171,6 +1239,39 @@ function fitWorkout(b) {
     <li>Never train through sharp pain — stop and tell a coach or parent.</li>
     <li>At least one full rest day a week.</li>
     <li>Drink water and have a recovery snack after every session.</li></ul></div>`;
+}
+
+/* workout log: nothing counts as done until it's logged, and the date is yours to choose */
+function openWorkoutLog(logId, blank) {
+  const old = S.workoutLog.find(l => l.id === logId), cw = currentWorkout(), checked = getDay(today())?.wk?.checked || [];
+  const items = old ? old.items.map(x => ({ ...x })) : blank ? [] : cw.items.map(x => ({ name: x.name, amount: x.amount, done: checked.includes(x.id) }));
+  let effort = old?.effort || 'medium';
+  modal(`<h2>${old ? 'Edit workout' : 'Log a workout'}</h2>
+    <label class="f">Workout<input id="wlTitle" value="${esc(old?.title || (blank ? '' : cw.title))}" placeholder="e.g. Speed session"></label>
+    <div class="grid2"><label class="f">Date<input type="date" id="wlDate" value="${old?.date || today()}" max="${today()}"></label>
+      <label class="f">Minutes<input type="number" inputmode="numeric" id="wlMin" min="1" max="300" value="${old?.minutes || (blank ? 30 : cw.minutes)}"></label></div>
+    ${items.length ? `<p class="small muted" style="margin:4px 0">Which exercises did you do?</p>${items.map((x, i) => `<label class="row" style="padding:6px 0;border-bottom:1px solid var(--line)">
+      <input type="checkbox" data-i="${i}" ${x.done ? 'checked' : ''}><span class="grow"><b>${esc(x.name)}</b> <span class="small muted">${esc(x.amount || '')}</span></span></label>`).join('')}` : ''}
+    <p class="small muted" style="margin:12px 0 6px">How hard was it?</p>
+    <div class="grid3" id="wlEffort">${Object.entries(INTENS).map(([id, n]) => `<button class="chip ${effort === id ? 'on' : ''}" style="justify-content:center" data-e="${id}">${n}</button>`).join('')}</div>
+    <label class="f" style="margin-top:12px">Notes<textarea id="wlNotes" placeholder="How did it feel? Any new records?">${esc(old?.notes || '')}</textarea></label>
+    <div class="grid2"><button class="btn ghost" data-act="closeModal">Cancel</button><button class="btn primary" id="wlSave">Save</button></div>`, m => {
+    $$('[data-e]', m).forEach(b => b.onclick = () => { effort = b.dataset.e; $$('[data-e]', m).forEach(x => x.classList.toggle('on', x === b)); });
+    $('#wlSave', m).onclick = () => {
+      const minutes = +$('#wlMin', m).value, date = $('#wlDate', m).value || today();
+      if (!(minutes > 0)) { toast('How many minutes?'); return; }
+      if (date > today()) { toast('That date hasn\'t happened yet'); return; }
+      $$('input[type=checkbox]', m).forEach(c => { items[+c.dataset.i].done = c.checked; });
+      const log = { id: old?.id || uid(), date, title: $('#wlTitle', m).value.trim() || 'Workout', minutes, effort, notes: $('#wlNotes', m).value.trim(), items };
+      if (old) Object.assign(old, log); else S.workoutLog.push(log);
+      S.sessions = S.sessions.filter(x => x.logId !== log.id);
+      S.sessions.push({ id: uid(), date, type: 'gym', duration: minutes, intensity: effort, workout: true, logId: log.id });
+      if (!old && date === today() && getDay(today())?.wk) getDay(today()).wk.checked = [];
+      save(); closeModal();
+      if (old) toast('Workout updated'); else celebrate(`💪 Workout logged for ${date === today() ? 'today' : fmtDate(date)}!`);
+      checkBadges(); render();
+    };
+  });
 }
 
 /* timers */
@@ -1261,7 +1362,7 @@ function profMe(b) {
       <label class="f">Height (cm)<input type="number" inputmode="decimal" step="0.1" id="gH" placeholder="${lastG?.height || 155}"></label>
       <label class="f">Weight (kg)<input type="number" inputmode="decimal" step="0.1" id="gW" placeholder="optional"></label></div>
     <button class="btn primary block" data-act="saveGrowth">Save measurement</button>
-    <p class="small muted">Weight is only used to work out your daily water goal (${glasses(baseGoal())} glasses on rest days). Nothing else.</p>
+    <p class="small muted">Weight is only used to work out how much to drink: your daily water goal (${glasses(baseGoal())} glasses on rest days) and around workouts. Height shows how fast you're growing, so workouts can go easier on knees and heels during a growth spurt.</p>
     ${g.length ? '<hr>' + g.slice().reverse().map(x => `<div class="item"><div class="grow"><b>${x.height ? x.height + ' cm' : '—'}</b> <span class="small muted">· ${fmtDate(x.date, { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
       <button class="icon-btn" data-act="delGrowth" data-id="${x.id}" aria-label="Delete">🗑️</button></div>`).join('') : ''}
   </div>`;
@@ -1272,12 +1373,18 @@ function profMe(b) {
 }
 function workoutProfileCard() {
   const W = S.workout, a = wkAnswers();
-  const q = (label, field, opts, multi, extra = '') => `<p style="font-weight:700;margin:14px 0 6px">${label}</p><div class="chips">${extra}${opts.map(([id, n]) => {
+  const q = (label, field, opts, multi, extra = '', after = '') => `<p style="font-weight:700;margin:14px 0 6px">${label}</p><div class="chips">${extra}${opts.map(([id, n]) => {
     const on = multi ? a[field].includes(id) : String(a[field]) === String(id);
     return `<button class="chip ${on ? 'on' : ''}" data-act="wkAns" data-f="${field}" data-val="${id}" data-multi="${multi ? 1 : ''}">${n}</button>`;
-  }).join('')}</div>`;
+  }).join('')}${after}</div>`;
   const own = W.mode === 'own' ? `
-    <div style="margin-top:12px">${W.own.length ? W.own.map(x => `<div class="item"><span class="em">🏋️</span><div class="grow"><div class="t">${esc(x.name)}</div><div class="small muted">${esc(x.amount)}</div></div>
+    <div style="margin-top:12px">${W.own.length ? W.own.map((x, i) => UI.editOwn === x.id ? `<div class="item" style="flex-wrap:wrap">
+      <div class="grid2" style="width:100%"><input id="eoName" value="${esc(x.name)}" list="exList" aria-label="Exercise"><input id="eoAmt" value="${esc(x.amount)}" placeholder="How much" aria-label="How much"></div>
+      <div class="grid2" style="width:100%"><button class="btn sm ghost" data-act="cancelOwnEdit">Cancel</button><button class="btn sm primary" data-act="saveOwnEdit">Save</button></div></div>`
+      : `<div class="item"><div class="grow"><div class="t">${esc(x.name)}</div><div class="small muted">${esc(x.amount)}</div></div>
+      <button class="icon-btn" data-act="moveOwn" data-dir="-1" data-id="${x.id}" aria-label="Move up" ${i ? '' : 'disabled style="opacity:.25"'}>↑</button>
+      <button class="icon-btn" data-act="moveOwn" data-dir="1" data-id="${x.id}" aria-label="Move down" ${i < W.own.length - 1 ? '' : 'disabled style="opacity:.25"'}>↓</button>
+      <button class="icon-btn" data-act="editOwn" data-id="${x.id}" aria-label="Edit">✏️</button>
       <button class="icon-btn" data-act="delOwn" data-id="${x.id}" aria-label="Delete">🗑️</button></div>`).join('') : '<p class="small muted">No exercises yet. Add the ones you usually do.</p>'}</div>
     <div class="grid2" style="margin-top:8px"><label class="f">Exercise<input id="ownName" list="exList" placeholder="e.g. Squats" autocomplete="off"></label>
       <label class="f">How much<input id="ownAmt" placeholder="e.g. 3 × 12 or 30 s"></label></div>
@@ -1297,8 +1404,13 @@ function workoutProfileCard() {
     <p class="small muted">${W.mode === 'own' ? 'Used for suggested workouts, if you ever want to try one.' : 'Your suggested workout is made from these.'}</p>
     ${q('What do you want to get better at? (pick any)', 'goals', WK_GOALS, true)}
     ${W.mode === 'own' ? '' : q('How many extra workouts a week?', 'perWeek', [[1, '1'], [2, '2'], [3, '3'], [4, '4']], false)}
-    ${q('How long can each workout be?', 'minutes', [[15, '15 min'], [20, '20 min'], [30, '30 min'], [45, '45 min']], false)}
-    ${q('Where will you usually work out?', 'place', WK_PLACES, false)}
+    ${q('How long can each workout be?', 'minutes', a.minutesOther ? [[15, '15 min'], [20, '20 min'], [30, '30 min'], [45, '45 min']].map(([v, n]) => [v + 'x', n]) : [[15, '15 min'], [20, '20 min'], [30, '30 min'], [45, '45 min']], false,
+      '', `<button class="chip ${a.minutesOther ? 'on' : ''}" data-act="wkAns" data-f="minutes" data-val="other">✏️ Other</button>`)}
+    ${a.minutesOther ? `<label class="f" style="margin-top:8px">Minutes<input type="number" inputmode="numeric" min="5" max="120" data-change="wkMinOther" value="${esc(a.minutes)}"></label>` : ''}
+    ${q('Where will you usually work out?', 'place', [...WK_PLACES, ['other', '✏️ Other']], false)}
+    ${a.place === 'other' ? `<label class="f" style="margin-top:8px">Where?<input data-change="wkPlaceOther" value="${esc(a.placeOther || '')}" placeholder="e.g. school field, terrace, corridor"></label>
+      <p style="font-weight:700;margin:4px 0 6px">Is there room to sprint 20 m there?</p>
+      <div class="chips">${[['yes', 'Yes'], ['no', 'No']].map(([v, n]) => `<button class="chip ${(a.space || 'no') === v ? 'on' : ''}" data-act="wkAns" data-f="space" data-val="${v}">${n}</button>`).join('')}</div>` : ''}
     ${q('What do you have? (pick any)', 'equipment', WK_EQUIP, true)}
     ${q('How much have you done workouts like this?', 'level', WK_LEVELS, false)}
     ${q('Does anything hurt or is anything injured?', 'niggles', WK_NIGGLES, true, `<button class="chip ${a.niggles.length ? '' : 'on'}" data-act="wkAns" data-f="niggles" data-val="none">No, all good</button>`)}
@@ -1322,7 +1434,7 @@ function profHistory(b) {
     </table><p class="small muted">Last ${Math.min(n, 14)} days, oldest on the left.</p></div></div>
   <div class="card"><div class="row between"><h2 style="margin:0">🏅 Badges</h2><span class="tag">${earned} / ${BADGES.length}</span></div>
     <div class="badges" style="margin-top:12px">${BADGES.map(x => `<div class="badge ${S.badges[x.id] ? 'got' : 'locked'}"><div class="e">${x.e}</div><div class="n">${x.n}</div><div class="d">${S.badges[x.id] ? fmtDate(S.badges[x.id], { day: 'numeric', month: 'short' }) : x.d}</div></div>`).join('')}</div></div>`;
-  const water = ks.map(k => (getDay(k)?.water || 0) / GLASS), goals = ks.map(k => waterGoal(k) / GLASS);
+  const water = ks.map(k => (getDay(k)?.water || 0) / glassMl()), goals = ks.map(k => waterGoal(k) / glassMl());
   mkChart('chWater', { type: 'bar', data: { labels: lab, datasets: [
     { data: water, backgroundColor: ks.map(k => metWater(k) ? '#2d8cf0' : '#a5d0ff'), borderRadius: 6, order: 2 },
     { type: 'line', data: goals, borderColor: '#1b7a3a', borderDash: [5, 4], pointRadius: 0, borderWidth: 2, order: 1 }] }, options: { scales: { y: { beginAtZero: true } } } });
@@ -1346,7 +1458,7 @@ function profSettings(b) {
     <div class="row between"><span><b>Phone notifications</b><div class="small muted">${perm === 'granted' ? '✅ Allowed' : perm === 'denied' ? '🚫 Blocked — allow them in your browser settings' : perm === 'unsupported' ? (ios && !standalone ? 'On iPhone, add to home screen first' : 'Not supported in this browser') : 'Not allowed yet'}</div></span>
       ${perm === 'default' ? '<button class="btn sm primary" data-act="askNotif">Allow</button>' : perm === 'granted' ? '<button class="btn sm" data-act="testNotif">Test</button>' : ''}</div>
     <hr>
-    <label class="f">Reminder every<select data-change="setting" data-f="interval">${[[90, '1½ hours'], [120, '2 hours']].map(([m, l]) => `<option value="${m}" ${+S.settings.interval === m ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <label class="f">Reminder every<select data-change="setting" data-f="interval">${[[60, '1 hour'], [90, '1½ hours'], [120, '2 hours']].map(([m, l]) => `<option value="${m}" ${+S.settings.interval === m ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     <div class="grid2"><label class="f">Quiet from<input type="time" data-change="setting" data-f="quietStart" value="${esc(S.settings.quietStart)}"></label>
     <label class="f">Quiet until<input type="time" data-change="setting" data-f="quietEnd" value="${esc(S.settings.quietEnd)}"></label></div>
     <details><summary>Today's reminder plan</summary>${reminderPlan().map(r => `<div class="small" style="padding:3px 0">${(getDay(today())?.fired || []).includes(r.id) ? '✓' : '•'} <b>${fmtTime(r.at)}</b> ${esc(r.title)}</div>`).join('') || '<p class="small muted">None.</p>'}</details>
@@ -1355,6 +1467,12 @@ function profSettings(b) {
   <div class="card"><h2>📲 Add to home screen</h2>
     ${standalone ? '<p>✅ Installed — you\'re running it from your home screen.</p>' : ios ? '<p class="small">In <b>Safari</b>: tap the Share button <b>⬆️</b>, then <b>Add to Home Screen</b>.</p>' : '<p class="small">In <b>Chrome</b>: tap the <b>⋮</b> menu, then <b>Add to Home screen</b> or <b>Install app</b>.</p>'}
     <button class="btn block ${deferredInstall ? '' : 'hidden'}" data-act="install">Install app</button>
+  </div>
+  <div class="card"><h2>👤 Account</h2>
+    <p>Logged in as <b>${esc(accts().users[ACCOUNT]?.display || ACCOUNT)}</b></p>
+    <div class="grid2"><button class="btn" data-act="logOut">Log out</button><button class="btn" data-act="changePw">Change password</button></div>
+    <button class="btn ghost block" style="margin-top:8px;color:var(--red)" data-act="deleteMe">Delete my account</button>
+    <p class="small muted">Accounts are kept on this device only.</p>
   </div>
   <div class="card"><h2>💾 Your data</h2>
     <p class="small muted">Everything is saved only on this device. Make a backup now and then — and before changing phones.</p>
@@ -1368,19 +1486,77 @@ function profSettings(b) {
 /* =========================================================
    ACTIONS
    ========================================================= */
-function addWater(ml) {
+function addWater(ml, photoId = null) {
   const k = today(), d = day(k), goal = waterGoal(k), before = d.water;
-  d.water = Math.max(0, d.water + ml); d.goal = goal; save();
+  d.water = Math.max(0, d.water + ml); d.goal = goal;
+  if (ml > 0) (d.drinks = d.drinks || []).push({ id: uid(), time: `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`, ml, photoId });
+  save();
   if (before < goal && d.water >= goal) setTimeout(() => celebrate('💧 Water goal smashed! Great job!'), 300);
   else if (ml > 0 && navigator.vibrate) navigator.vibrate(30);
   checkBadges(); render();
 }
+// Amount typed in ml, litres or glasses.
+function openWaterAmount(photoId = null) {
+  modal(`<h2>${photoId ? '📷 How much did you drink?' : '✏️ How much did you drink?'}</h2>
+    ${photoId ? `<img class="preview" data-photo="${photoId}" alt="">` : ''}
+    <div class="chips" style="margin:8px 0 12px">${[[glassMl(), `My glass (${glassMl()} ml)`], [150, '150 ml'], [330, '330 ml'], [500, '500 ml'], [750, '750 ml'], [1000, '1 L']].map(([v, n]) => `<button class="chip" data-v="${v}">${n}</button>`).join('')}</div>
+    <div class="row"><input type="number" inputmode="decimal" id="wAmt" min="0" step="any" placeholder="Amount" class="grow">
+      <select id="wUnit" style="width:130px"><option value="ml">ml</option><option value="l">litres</option><option value="glass">glasses</option></select></div>
+    <div class="grid2" style="margin-top:14px"><button class="btn ghost" id="wCancel">Cancel</button><button class="btn water" id="wSave">Add</button></div>`, m => {
+    hydratePhotos(m);
+    $$('[data-v]', m).forEach(b => b.onclick = () => { $('#wAmt', m).value = b.dataset.v; $('#wUnit', m).value = 'ml'; });
+    const cancel = async () => { if (photoId) { try { await idb.del(photoId); } catch (e) { } } closeModal(); };
+    $('#wCancel', m).onclick = cancel;
+    $('#wSave', m).onclick = () => {
+      const v = parseFloat($('#wAmt', m).value), unit = $('#wUnit', m).value;
+      const ml = Math.round(unit === 'l' ? v * 1000 : unit === 'glass' ? v * glassMl() : v);
+      if (!(ml > 0) || ml > 5000) { toast('Enter an amount, e.g. 300 ml'); return; }
+      closeModal(); addWater(ml, photoId); toast(`💧 +${ml >= 1000 ? fmtL(ml) : ml + ' ml'}`);
+    };
+    setTimeout(() => $('#wAmt', m)?.focus(), 100);
+  });
+}
+function openMyGlass() {
+  modal(`<h2>🥛 My glass</h2><p class="small muted">Take a photo of the glass or bottle you usually drink from and say how much it holds. "+1 glass" then adds that amount.</p>
+    ${S.settings.glassPhotoId ? `<img class="preview" data-photo="${S.settings.glassPhotoId}" alt="My glass">` : ''}
+    <button class="btn block" id="gPhoto">📷 ${S.settings.glassPhotoId ? 'Retake photo' : 'Take a photo of my glass'}</button>
+    <p style="font-weight:700;margin:14px 0 6px">How much does it hold?</p>
+    <div class="chips">${[150, 200, 250, 300, 350, 500, 750, 1000].map(v => `<button class="chip ${glassMl() === v ? 'on' : ''}" data-v="${v}">${v >= 1000 ? '1 L' : v + ' ml'}</button>`).join('')}</div>
+    <label class="f" style="margin-top:10px">Or type it (ml)<input type="number" inputmode="numeric" id="gMl" min="50" max="2000" value="${glassMl()}"></label>
+    <p class="small muted">Not sure? Fill it from a measuring jug, or check the label on a bottle.</p>
+    <div class="grid2"><button class="btn ghost" data-act="closeModal">Cancel</button><button class="btn primary" id="gSave">Save</button></div>`, m => {
+    hydratePhotos(m);
+    $$('[data-v]', m).forEach(b => b.onclick = () => { $('#gMl', m).value = b.dataset.v; $$('[data-v]', m).forEach(x => x.classList.toggle('on', x === b)); });
+    $('#gPhoto', m).onclick = () => { S.settings.glassMl = clamp(+$('#gMl', m).value || glassMl(), 50, 2000); waterPhotoFor = 'glass'; $('#waterPhotoInput').click(); };
+    $('#gSave', m).onclick = () => {
+      const v = +$('#gMl', m).value; if (!(v >= 50 && v <= 2000)) { toast('Between 50 and 2000 ml'); return; }
+      S.settings.glassMl = Math.round(v); save(); closeModal(); toast(`🥛 Your glass is ${Math.round(v)} ml`); render();
+    };
+  });
+}
+let waterPhotoFor = 'drink';
 const ACT = {
   tab(el, e) { e.preventDefault(); keepFoodName(); UI.tab = el.dataset.tab; saveUI(); render(); scrollTo(0, 0); },
   seg(el) { keepFoodName(); UI[el.dataset.key] = el.dataset.val; saveUI(); render(); },
   goFit(el) { UI.tab = 'fitness'; UI.fit = el.dataset.val; saveUI(); render(); scrollTo(0, 0); },
   hist(el) { UI.hist = +el.dataset.val; saveUI(); render(); },
   water(el) { addWater(+el.dataset.ml); },
+  waterUndo() {
+    const d = day(), last = (d.drinks || []).pop();
+    if (last) { d.water = Math.max(0, d.water - last.ml); if (last.photoId) idb.del(last.photoId).catch(() => { }); }
+    else if (d.water > 0) d.water = Math.max(0, d.water - glassMl());
+    else { toast('Nothing to undo'); return; }
+    save(); toast(`Removed ${last ? last.ml : glassMl()} ml`); render();
+  },
+  delDrink(el) {
+    const d = day(), x = (d.drinks || []).find(y => y.id === el.dataset.id); if (!x) return;
+    d.drinks = d.drinks.filter(y => y !== x); d.water = Math.max(0, d.water - x.ml);
+    if (x.photoId) idb.del(x.photoId).catch(() => { });
+    save(); render();
+  },
+  waterCustom() { openWaterAmount(); },
+  waterPhoto() { waterPhotoFor = 'drink'; $('#waterPhotoInput').click(); },
+  myGlass() { openMyGlass(); },
   dayType(el) { const d = day(); d.type = el.dataset.val; d.goal = waterGoal(); save(); render(); },
   closeModal() { closeModal(); },
   goProf(el, e) { e.preventDefault(); UI.tab = 'profile'; UI.prof = 'me'; saveUI(); render(); setTimeout(() => $('[data-act=wkMode]')?.closest('.card').scrollIntoView({ block: 'start' }), 50); },
@@ -1389,10 +1565,11 @@ const ACT = {
   wkAns(el) {
     const W = S.workout, f = el.dataset.f, a = wkAnswers();
     let v = el.dataset.val;
+    if (f === 'minutes' && v === 'other') { W.answers = { ...a, minutesOther: true }; save(); render(); return; }
     if (f === 'niggles' && v === 'none') v = [];
     else if (el.dataset.multi) v = a[f].includes(v) ? a[f].filter(x => x !== v) : [...a[f], v];
-    else if (f === 'perWeek' || f === 'minutes') v = +v;
-    W.answers = { ...a, [f]: v }; save(); render();
+    else if (f === 'perWeek' || f === 'minutes') v = parseInt(v, 10);
+    W.answers = { ...a, [f]: v, ...(f === 'minutes' ? { minutesOther: false } : {}) }; save(); render();
   },
   addOwn() {
     const name = $('#ownName').value.trim(), amount = $('#ownAmt').value.trim();
@@ -1414,18 +1591,27 @@ const ACT = {
     d.wk.checked = d.wk.checked.includes(id) ? d.wk.checked.filter(x => x !== id) : [...d.wk.checked, id];
     save(); if (navigator.vibrate) navigator.vibrate(20); render();
   },
-  wkFinish() {
-    const d = day(), cw = currentWorkout(); d.wk = d.wk || { checked: [] };
-    if (d.wk.done) return;
-    const ticked = cw.items.filter(x => d.wk.checked.includes(x.id)).length;
-    const minutes = ticked && ticked < cw.items.length ? Math.max(5, Math.round(cw.minutes * ticked / cw.items.length)) : cw.minutes;
-    S.sessions.push({ id: uid(), date: today(), type: 'gym', duration: minutes, intensity: 'medium', workout: true });
-    d.wk.done = true; d.wk.minutes = minutes; save();
-    celebrate('💪 Workout done! Drink 2 glasses and have a recovery snack.');
-    checkBadges(); render();
+  wkLog(el) { openWorkoutLog(el.dataset.id, !!el.dataset.blank); },
+  wkDelLog(el) {
+    confirmBox('Delete this workout?', 'It comes off your log and your training minutes.', 'Delete', () => {
+      S.workoutLog = S.workoutLog.filter(l => l.id !== el.dataset.id); S.sessions = S.sessions.filter(x => x.logId !== el.dataset.id); save(); render();
+    });
+  },
+  moreLogs() { UI.wlN = (UI.wlN || 8) + 10; render(); },
+  editOwn(el) { UI.editOwn = el.dataset.id; render(); setTimeout(() => $('#eoName')?.focus(), 50); },
+  cancelOwnEdit() { UI.editOwn = null; render(); },
+  saveOwnEdit() {
+    const x = S.workout.own.find(o => o.id === UI.editOwn), name = $('#eoName').value.trim();
+    if (!x) return; if (!name) { toast('Type the exercise name'); return; }
+    x.name = name; x.amount = $('#eoAmt').value.trim(); UI.editOwn = null; save(); render();
+  },
+  moveOwn(el) {
+    const own = S.workout.own, i = own.findIndex(o => o.id === el.dataset.id), j = i + +el.dataset.dir;
+    if (i < 0 || j < 0 || j >= own.length) return;
+    [own[i], own[j]] = [own[j], own[i]]; save(); render();
   },
   dismissBanner(el) { const i = banners.findIndex(b => b.id === el.dataset.id); if (i > -1) banners.splice(i, 1); renderBanners(); },
-  bannerWater(el) { ACT.dismissBanner(el); addWater(GLASS); toast('💧 +1 glass'); },
+  bannerWater(el) { ACT.dismissBanner(el); addWater(glassMl()); toast('💧 +1 glass'); },
   bannerFood(el) { ACT.dismissBanner(el); UI.tab = 'food'; UI.food = 'log'; UI.pending = null; render(); scrollTo(0, 0); },
   // food
   pickMeal(el) { keepFoodName(); UI.pending.meal = el.dataset.val; renderFood($('#view')); hydratePhotos(); },
@@ -1480,7 +1666,7 @@ const ACT = {
   },
   delSession(el) {
     confirmBox('Delete this session?', 'This can\'t be undone.', 'Delete', () => {
-      const s = S.sessions.find(x => x.id === el.dataset.id); if (s?.workout && getDay(s.date)?.wk) getDay(s.date).wk.done = false;
+      const s = S.sessions.find(x => x.id === el.dataset.id); if (s?.logId) S.workoutLog = S.workoutLog.filter(l => l.id !== s.logId);
       S.sessions = S.sessions.filter(x => x.id !== el.dataset.id); save(); render();
     });
   },
@@ -1575,6 +1761,8 @@ const CHANGE = {
     ['energy', 'soreness', 'mood'].forEach(f => { if (!d.checkin[f]) d.checkin[f] = 3; });
     save(); render();
   },
+  wkMinOther(el, ev) { if (ev.type !== 'change') return; S.workout.answers = { ...wkAnswers(), minutes: clamp(parseInt(el.value, 10) || 20, 5, 120), minutesOther: true }; save(); render(); },
+  wkPlaceOther(el, ev) { if (ev.type !== 'change') return; S.workout.answers = { ...wkAnswers(), placeOther: el.value.trim() }; save(); },
   wkOwnMin(el, ev) { if (ev.type !== 'change') return; S.workout.ownMinutes = clamp(+el.value || 30, 5, 180); save(); },
   rate(el) { $('#rateOut').textContent = el.value + '/10'; },
   testSel(el, ev) { if (ev.type !== 'change') return; UI.testSel = el.value; saveUI(); render(); },
@@ -1609,6 +1797,18 @@ $('#photoInput').addEventListener('change', async e => {
     UI.tab = 'food'; UI.food = 'log'; render();
     guessFood(canvas);
   } catch (err) { toast('Could not read that photo'); }
+});
+$('#waterPhotoInput').addEventListener('change', async e => {
+  const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+  try {
+    const { blob } = await compress(file);
+    const id = uid(); await idb.put({ id, date: today(), blob });
+    if (waterPhotoFor === 'glass') {
+      const old = S.settings.glassPhotoId; S.settings.glassPhotoId = id; save();
+      if (old) { idb.del(old).catch(() => { }); photoURLs.delete(old); }
+      openMyGlass(); render();
+    } else openWaterAmount(id);
+  } catch (err) { toast('Could not use that photo'); }
 });
 $('#importInput').addEventListener('change', async e => {
   const file = e.target.files[0]; e.target.value = ''; if (!file) return;
@@ -1660,14 +1860,135 @@ function tick() {
   const k = today();
   if (k !== curDay) { curDay = k; banners.length = 0; renderBanners(); UI.pending = null; render(); } // a new day starts at midnight
   tickReminders();
-  if (UI.tab === 'today' && !document.activeElement?.matches('input,select,textarea') && (nextReminder()?.id || null) !== shownReminder) render();
+  if (UI.tab === 'today' && !document.activeElement?.matches('input,select,textarea,#modal *') && (nextReminder()?.id || null) !== shownReminder) render();
 }
+
+/* ---------- accounts (kept on this device; passwords stored as salted PBKDF2 hashes) ---------- */
+const ACCTS_KEY = 'footyTracker.accounts', SESSION_KEY = 'footyTracker.session';
+function accts() { try { return JSON.parse(localStorage.getItem(ACCTS_KEY)) || { users: {} }; } catch (e) { return { users: {} }; } }
+function saveAccts(a) { localStorage.setItem(ACCTS_KEY, JSON.stringify(a)); }
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+async function hashPw(pw, saltB64) {
+  const salt = saltB64 ? Uint8Array.from(atob(saltB64), c => c.charCodeAt(0)) : crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 150000 }, key, 256);
+  return { salt: b64(salt), hash: b64(bits) };
+}
+const normUser = u => String(u || '').trim().toLowerCase();
+function sessionUser() { try { return sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY); } catch (e) { return null; } }
+function renderAuth(mode = 'login', msg = '') {
+  document.body.classList.add('auth');
+  const users = Object.entries(accts().users), canHash = !!(window.crypto && crypto.subtle);
+  if (!users.length && mode === 'login') mode = 'create';
+  const legacy = !accts().legacyClaimed && !!localStorage.getItem('footyTracker.v1');
+  $('#hdrTitle').textContent = 'Footy Tracker'; $('#hdrDate').textContent = '';
+  $('#view').innerHTML = `
+  <div class="center" style="margin:18px 0 14px"><div style="font-size:64px">⚽</div><h2 style="font-size:24px;margin:4px 0">Footy Tracker</h2><p class="muted">Water, food, sleep, training and workouts.</p></div>
+  <div class="seg">${[['login', 'Log in'], ['create', 'Create account']].map(([id, n]) => `<button class="${mode === id ? 'on' : ''}" data-act="authMode" data-val="${id}">${n}</button>`).join('')}</div>
+  <div class="card">
+    ${!canHash ? '<div class="alert warn small">Logging in needs the app\'s secure https address (e.g. your github.io link). It won\'t work from a file opened on this computer.</div>' : ''}
+    ${msg ? `<div class="alert warn small">${esc(msg)}</div>` : ''}
+    ${mode === 'login' && users.length ? `<p class="small muted" style="margin:0 0 6px">On this device:</p><div class="chips" style="margin-bottom:12px">${users.map(([u, x]) => `<button class="chip" data-act="pickUser" data-val="${esc(u)}">👤 ${esc(x.display || u)}</button>`).join('')}</div>` : ''}
+    ${mode === 'create' && legacy ? '<div class="alert info small">Your existing tracker data will move into this new account.</div>' : ''}
+    <form id="authForm" autocomplete="on">
+      <label class="f">Username<input id="aUser" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="20" placeholder="e.g. arjun10"></label>
+      <label class="f">Password<input id="aPass" name="password" type="password" autocomplete="${mode === 'create' ? 'new-password' : 'current-password'}" required minlength="4"></label>
+      ${mode === 'create' ? '<label class="f">Password again<input id="aPass2" type="password" autocomplete="new-password" required minlength="4"></label>' : ''}
+      <label class="row small" style="margin:6px 0 14px"><input type="checkbox" id="aKeep" checked> Keep me logged in on this device</label>
+      <button class="btn primary block big" type="submit" ${canHash ? '' : 'disabled'}>${mode === 'create' ? 'Create account' : 'Log in'}</button>
+    </form>
+    ${mode === 'login' && users.length ? '<button class="btn ghost block" style="margin-top:10px" data-act="forgotPw">Forgot password?</button>' : ''}
+  </div>
+  <p class="small muted center">Accounts and data stay on this device — no email, no internet account. Each player on this phone or laptop can have their own.</p>`;
+  $('#authForm').onsubmit = async e => { e.preventDefault(); await submitAuth(mode); };
+}
+async function submitAuth(mode) {
+  const display = $('#aUser').value.trim(), u = normUser(display), pw = $('#aPass').value, keep = $('#aKeep').checked;
+  const A = accts();
+  if (!/^[a-z0-9_.-]{3,20}$/.test(u)) return renderAuthMsg(mode, 'Username: 3–20 letters, numbers, dots, dashes or underscores.', display);
+  if (pw.length < 4) return renderAuthMsg(mode, 'Password needs at least 4 characters.', display);
+  if (mode === 'create') {
+    if (A.users[u]) return renderAuthMsg(mode, 'That username is taken on this device. Try another, or log in.', display);
+    if (pw !== $('#aPass2').value) return renderAuthMsg(mode, 'The two passwords don\'t match.', display);
+    const { salt, hash } = await hashPw(pw);
+    const legacy = !A.legacyClaimed && !!localStorage.getItem('footyTracker.v1');
+    // The first account takes over data saved before accounts existed.
+    A.users[u] = { display, salt, hash, created: new Date().toISOString(), key: legacy ? 'footyTracker.v1' : 'footyTracker.v1.u.' + u, db: legacy ? 'footyTracker' : 'footyTracker.u.' + u };
+    if (legacy || Object.keys(A.users).length === 1) A.legacyClaimed = true;
+    saveAccts(A);
+  } else {
+    const x = A.users[u];
+    if (!x || (await hashPw(pw, x.salt)).hash !== x.hash) return renderAuthMsg(mode, 'Wrong username or password.', display);
+  }
+  try { (keep ? localStorage : sessionStorage).setItem(SESSION_KEY, u); } catch (e) { }
+  startApp(u, mode === 'create');
+}
+function renderAuthMsg(mode, msg, user) { renderAuth(mode, msg); $('#aUser').value = user || ''; $('#aPass').focus(); }
+async function logOut() {
+  try { sessionStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_KEY); } catch (e) { }
+  location.reload();
+}
+async function deleteAccount(u) {
+  const A = accts(), x = A.users[u]; if (!x) return;
+  localStorage.removeItem(x.key); localStorage.removeItem(x.key + '.ui');
+  try { indexedDB.deleteDatabase(x.db); } catch (e) { }
+  delete A.users[u]; saveAccts(A);
+}
+function startApp(u, isNew) {
+  const x = accts().users[u]; if (!x) { renderAuth(); return; }
+  ACCOUNT = u; KEY = x.key; DB_NAME = x.db; idb._db = null;
+  document.body.classList.remove('auth');
+  S = load();
+  // Workouts finished before the log existed become log entries.
+  S.sessions.filter(s => s.workout && !s.logId).forEach(s => { s.logId = uid(); S.workoutLog.push({ id: s.logId, date: s.date, title: 'Workout', minutes: s.duration, effort: s.intensity || 'medium', notes: '', items: [] }); });
+  if (!S.profile.name) S.profile.name = x.display.charAt(0).toUpperCase() + x.display.slice(1);
+  save();
+  try { Object.assign(UI, JSON.parse(localStorage.getItem(KEY + '.ui')) || {}); UI.pending = null; } catch (e) { }
+  if (isNew) { UI.tab = 'today'; toast(`Welcome, ${S.profile.name}! ⚽`); }
+  render(); checkBadges(); tick();
+  setInterval(tick, 30000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });
+}
+Object.assign(ACT, {
+  authMode(el) { renderAuth(el.dataset.val); },
+  pickUser(el) { $('#aUser').value = el.dataset.val; $('#aPass').focus(); },
+  forgotPw() {
+    const users = Object.entries(accts().users);
+    modal(`<h2>Forgot password?</h2><p class="small">There's no email or server, so a password can't be recovered or reset. If it's really gone, you can remove that account from this device and start again — <b>its data will be deleted</b>.</p>
+      <label class="f">Account to remove<select id="fpUser">${users.map(([u, x]) => `<option value="${esc(u)}">${esc(x.display || u)}</option>`).join('')}</select></label>
+      <label class="f">Type the username again to confirm<input id="fpConfirm" autocapitalize="none"></label>
+      <div class="grid2"><button class="btn ghost" data-act="closeModal">Cancel</button><button class="btn danger" id="fpGo">Remove account</button></div>`, m => {
+      $('#fpGo', m).onclick = async () => {
+        const u = $('#fpUser', m).value; if (normUser($('#fpConfirm', m).value) !== u) { toast('Type the username exactly to confirm'); return; }
+        await deleteAccount(u); closeModal(); toast('Account removed'); renderAuth('login');
+      };
+    });
+  },
+  logOut() { logOut(); },
+  changePw() {
+    modal(`<h2>Change password</h2>
+      <label class="f">Current password<input type="password" id="cp0" autocomplete="current-password"></label>
+      <label class="f">New password<input type="password" id="cp1" autocomplete="new-password"></label>
+      <label class="f">New password again<input type="password" id="cp2" autocomplete="new-password"></label>
+      <div class="grid2"><button class="btn ghost" data-act="closeModal">Cancel</button><button class="btn primary" id="cpGo">Save</button></div>`, m => {
+      $('#cpGo', m).onclick = async () => {
+        const A = accts(), x = A.users[ACCOUNT];
+        if ((await hashPw($('#cp0', m).value, x.salt)).hash !== x.hash) { toast('Current password is wrong'); return; }
+        const p1 = $('#cp1', m).value; if (p1.length < 4) { toast('At least 4 characters'); return; } if (p1 !== $('#cp2', m).value) { toast('New passwords don\'t match'); return; }
+        Object.assign(x, await hashPw(p1)); saveAccts(A); closeModal(); toast('🔑 Password changed');
+      };
+    });
+  },
+  deleteMe() {
+    confirmBox('Delete your account?', 'This removes your account and ALL its data and photos from this device.', 'Continue', () => {
+      confirmBox('Are you really sure?', 'There is no undo. Export a backup first if you might want it back.', 'Yes, delete my account', async () => { await deleteAccount(ACCOUNT); logOut(); });
+    });
+  },
+});
+
 setupPWA();
-render();
-checkBadges();
-tick();
-setInterval(tick, 30000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick(); });
+const who = sessionUser();
+if (who && accts().users[who]) startApp(who); else renderAuth();
 </script>
 </body>
 </html>

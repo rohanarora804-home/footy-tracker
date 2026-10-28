@@ -1,6 +1,6 @@
 // Footy Tracker service worker: makes the app open offline after the first visit,
 // and lets notifications open the app when tapped.
-const CACHE = 'footy-v1';
+const CACHE = 'footy-v2';
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./', './index.html'])).then(() => self.skipWaiting()));
@@ -12,11 +12,20 @@ self.addEventListener('activate', e => {
     .then(() => self.clients.claim()));
 });
 
-// Serve from the cache straight away, and refresh the cache from the network in the background.
-// This covers the page itself, the CDN libraries and the food-recognition model files.
+// The page itself: always the newest version when online (so an update shows straight away),
+// the saved copy when offline.
+// Everything else (CDN libraries, food-recognition model files): from the cache straight away,
+// refreshed from the network in the background.
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || !req.url.startsWith('http')) return;
+  if (req.mode === 'navigate') {
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then(res => {
+      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put('./index.html', copy)); }
+      return res;
+    }).catch(() => caches.match('./index.html')));
+    return;
+  }
   e.respondWith(caches.open(CACHE).then(async cache => {
     const hit = await cache.match(req, { ignoreSearch: req.mode === 'navigate' });
     const net = fetch(req).then(res => {
